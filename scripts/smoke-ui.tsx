@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { testRender } from "@opentui/solid";
-import { RGBA } from "@opentui/core";
-import { createSignal } from "solid-js";
+import { RGBA, type TextareaRenderable } from "@opentui/core";
+import { createSignal, Show } from "solid-js";
 import type { StatefulColor } from "@opencode/theme/tui";
 import { NotificationView } from "../src/notification-view.tsx";
 import { Notifications, type Notification } from "../src/notification.ts";
@@ -29,6 +29,10 @@ const button: StatefulColor = {
           : color,
 };
 const [notices, setNotices] = createSignal<Notification[]>([]);
+const [editorRow, setEditorRow] = createSignal<number>();
+const [dialogVisible, setDialogVisible] = createSignal(false);
+let composer: TextareaRenderable | undefined;
+const editorText = "EDITOR CONTENT MUST STAY UNDER THE TOAST";
 const actions: boolean[] = [];
 let enabled = false;
 const notifications = new Notifications({
@@ -69,20 +73,60 @@ function mention(messageID: string) {
 }
 const view = await testRender(
   () => (
-    <NotificationView
-      theme={{
-        text: { base: color, muted: color, action: { secondary: button } },
-        border: { base: color },
-        background: {
-          raised: { base: RGBA.fromHex("#222222") },
-          action: { secondary: button },
-        },
-      }}
-      notices={notices()}
-      act={(key, value) => notifications.act(key, value)}
-      refresh={(key) => notifications.refresh(key)}
-      dismiss={(key) => notifications.dismiss(key)}
-    />
+    <box width="100%" height="100%">
+      <NotificationView
+        theme={{
+          text: { base: color, muted: color, action: { secondary: button } },
+          border: { base: color },
+          background: {
+            raised: { base: RGBA.fromHex("#222222") },
+            action: { secondary: button },
+          },
+        }}
+        notices={notices()}
+        act={(key, value) => notifications.act(key, value)}
+        refresh={(key) => notifications.refresh(key)}
+        dismiss={(key) => notifications.dismiss(key)}
+      />
+      <Show when={editorRow() !== undefined}>
+        <box
+          position="absolute"
+          top={editorRow() ?? 0}
+          left={0}
+          width="100%"
+          height={1}
+          zIndex={1000}
+        >
+          <textarea
+            id="composer"
+            ref={(node) => {
+              composer = node;
+            }}
+            focused
+            width="100%"
+            height={1}
+            initialValue={editorText}
+            backgroundColor="#44475a"
+            focusedBackgroundColor="#44475a"
+            textColor="#ffffff"
+            focusedTextColor="#ffffff"
+          />
+        </box>
+      </Show>
+      <Show when={dialogVisible()}>
+        <box
+          position="absolute"
+          top={0}
+          left={0}
+          width="100%"
+          height="100%"
+          zIndex={3000}
+          backgroundColor="#111111"
+        >
+          <text>Permission dialog must stay above the toast</text>
+        </box>
+      </Show>
+    </box>
   ),
   { width: 100, height: 32 },
 );
@@ -99,23 +143,50 @@ try {
     await view.flush();
   }
   await view.waitForFrame((frame) => frame.includes("Monitoring is off"));
-  const initial = JSON.stringify(view.captureSpans());
   const frame = view.captureCharFrame().split("\n");
   const buttonY = frame.findIndex((line) => line.includes("[Turn on]"));
   const buttonX = (frame[buttonY]?.indexOf("[Turn on]") ?? -1) + 2;
   assert.ok(buttonX >= 2 && buttonY >= 0);
+  // Mount and focus a real editor after the toast, exactly across its controls.
+  setEditorRow(buttonY);
+  await view.flush();
+  assert.ok(
+    view.captureCharFrame().split("\n")[buttonY]?.includes("[Turn on]"),
+    "Focused composer must not paint over toast controls",
+  );
+  setDialogVisible(true);
+  await view.flush();
+  assert.ok(
+    view
+      .captureCharFrame()
+      .includes("Permission dialog must stay above the toast"),
+  );
+  assert.ok(
+    !view.captureCharFrame().includes("[Turn on]"),
+    "Permission dialogs cover the toast",
+  );
+  await view.mockMouse.click(buttonX, buttonY);
+  await view.flush();
+  assert.deepEqual(
+    actions,
+    [],
+    "A dialog covering the toast also blocks its mouse controls",
+  );
+  setDialogVisible(false);
+  await view.mockMouse.moveTo(0, 0);
+  await view.flush();
+  // Use a baseline including the editor for hover paint comparisons.
+  const layeredInitial = JSON.stringify(view.captureSpans());
   await view.mockMouse.moveTo(buttonX, buttonY);
   await view.flush();
-  assert.notEqual(
-    JSON.stringify(view.captureSpans()),
-    initial,
+  assert.ok(
+    JSON.stringify(view.captureSpans()) !== layeredInitial,
     "Hover changes the rendered button colors",
   );
   await view.mockMouse.moveTo(0, 0);
   await view.flush();
-  assert.equal(
-    JSON.stringify(view.captureSpans()),
-    initial,
+  assert.ok(
+    JSON.stringify(view.captureSpans()) === layeredInitial,
     "Mouse leave restores the button colors",
   );
   await click("[Turn on]", 2);
@@ -135,12 +206,27 @@ try {
   await click("[Turn off]");
   await view.waitForFrame((frame) => frame.includes("Monitoring is off"));
   assert.deepEqual(actions, [true, false]);
+  assert.ok(composer?.focused, "Toast controls do not steal editor focus");
+  composer.cursorOffset = composer.plainText.length;
+  await view.mockInput.typeText(" TYPED");
+  await view.flush();
+  assert.equal(
+    composer.plainText,
+    `${editorText} TYPED`,
+    "Typing still reaches the editor underneath",
+  );
+  assert.ok(
+    view.captureCharFrame().split("\n")[buttonY]?.includes("[Turn on]"),
+    "Editor repaint cannot cover the toast",
+  );
   view.resize(50, 24);
   await view.waitForFrame(
     (frame) => frame.includes("[Dismiss]") && frame.includes("[Turn on]"),
   );
   await click("[Dismiss]");
   await view.waitForFrame((frame) => !frame.includes("Pull request mentioned"));
+  view.resize(100, 32);
+  await view.waitForFrame((frame) => frame.includes(`${editorText} TYPED`));
   mention("message_one");
   await view.flush();
   assert.ok(
@@ -158,7 +244,7 @@ try {
     "New mention only reopens the controls",
   );
   console.log(
-    "Headless TUI smoke: render, hover/leave, on/off clicks, disabled/right-click guards, resize, dismiss, replay suppression and new-message reopening passed.",
+    "Headless TUI smoke: composer/dialog layering, hit-testing, typing, hover/leave, on/off clicks, disabled/right-click guards, resize, dismiss, replay suppression and reopening passed.",
   );
 } finally {
   notifications.close();
