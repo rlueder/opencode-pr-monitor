@@ -1,5 +1,6 @@
 import type { SessionTextEnded } from "@opencode/client";
 import type { ToastOptions } from "@opencode/plugin/tui/context";
+import type { Plugin } from "@opencode/plugin/tui";
 import { parsePR } from "./types.ts";
 
 export const TOAST_HISTORY_LIMIT = 2_000;
@@ -37,6 +38,26 @@ export interface ToastBoundary {
   history: ToastHistory;
   update: (mutation: (history: ToastHistory) => void) => void;
   show: (toast: ToastOptions) => void;
+}
+
+export function setupToasts(context: {
+  data: Pick<Plugin.Context["data"], "on">;
+  storage: Pick<Plugin.Context["storage"], "memory">;
+  ui: Pick<Plugin.Context["ui"], "toast">;
+}): () => void {
+  const startedAt = Date.now();
+  const [history, update] = context.storage.memory("pr-mentions/actions-v1", {
+    initial: { seen: [] as string[] },
+  });
+  return watchPRMentions(
+    (handler) => context.data.on("session.text.ended", handler),
+    {
+      startedAt,
+      history,
+      update,
+      show: (toast) => context.ui.toast.show(toast),
+    },
+  );
 }
 
 export function watchPRMentions(

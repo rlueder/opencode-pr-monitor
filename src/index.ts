@@ -3,6 +3,7 @@ import { Plugin } from "@opencode/plugin";
 import { Monitor, POLL } from "./engine.ts";
 import { GitHub, readLocal, runner } from "./github.ts";
 import { decodeBinding } from "./types.ts";
+import { MonitorUI } from "./rpc.ts";
 
 // The V2 runtime owns one active plugin/location. This extra guard also protects
 // accidental duplicate setup in the same module instance during reload.
@@ -79,6 +80,24 @@ export default Plugin.define({
       },
     });
     await monitor.init();
+    const rpc = await ctx.rpc.register(MonitorUI, {
+      status: async (input) => {
+        if (
+          !input ||
+          typeof input !== "object" ||
+          !("sessionID" in input) ||
+          typeof input.sessionID !== "string"
+        )
+          throw new Error("A session ID is required");
+        const s = await ctx.session.get({ sessionID: input.sessionID });
+        if (
+          s.projectID !== ctx.location.project.id ||
+          (await realpath(s.location.directory)) !== directory
+        )
+          throw new Error("Session belongs to another location");
+        return monitor.view(input.sessionID);
+      },
+    });
     const registration = await ctx.command.transform((editor) => {
       editor.add({
         name: "pr-monitor",
@@ -119,6 +138,7 @@ export default Plugin.define({
       clearTimeout(timer);
       await monitor.close();
       await registration.dispose();
+      await rpc.dispose();
       if (owners.get(directory) === cleanup) owners.delete(directory);
     };
     owners.set(directory, cleanup);

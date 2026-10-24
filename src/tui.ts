@@ -1,29 +1,126 @@
 import { Plugin } from "@opencode/plugin/tui";
-import { watchPRMentions } from "./pr-toast.ts";
-
-type ToastContext = {
-  data: Pick<Plugin.Context["data"], "on">;
-  storage: Pick<Plugin.Context["storage"], "memory">;
-  ui: Pick<Plugin.Context["ui"], "toast">;
-};
-
-export function setupToasts(context: ToastContext): () => void {
-  const startedAt = Date.now();
-  const [history, update] = context.storage.memory("pr-mentions/v1", {
-    initial: { seen: [] as string[] },
-  });
-  return watchPRMentions(
-    (handler) => context.data.on("session.text.ended", handler),
-    {
-      startedAt,
-      history,
-      update,
-      show: (toast) => context.ui.toast.show(toast),
-    },
-  );
-}
+import { createComponent, createSignal } from "solid-js";
+import { setupToasts } from "./pr-toast.ts";
+import { Notifications, type Notification } from "./notification.ts";
+import { NotificationView } from "./notification-view.tsx";
+import { decodeStatus, MonitorUI } from "./rpc.ts";
 
 export default Plugin.define({
   id: "opencode.pr-monitor.tui",
-  setup: setupToasts,
+  setup(context) {
+    const [notices, setNotices] = createSignal<Notification[]>([]);
+    const rpc = context.client.rpc(MonitorUI);
+    const notifications = new Notifications({
+      changed: (value) => setNotices(value),
+      status: async (notice, signal) => {
+        const session = await context.client.session.get(
+          { sessionID: notice.sessionID },
+          { signal },
+        );
+        if (
+          session.location.directory !== notice.directory ||
+          session.time.archived !== undefined
+        )
+          throw new Error(
+            "Session moved or was archived. Monitoring controls are unavailable.",
+          );
+        return decodeStatus(
+          await rpc.status(
+            { sessionID: notice.sessionID },
+            {
+              location: { directory: notice.directory },
+              signal,
+            },
+          ),
+        );
+      },
+      command: async (notice, text, signal) => {
+        await context.client.session.command(
+          { sessionID: notice.sessionID, name: "pr-monitor", text },
+          { signal },
+        );
+      },
+    });
+    const stopMessages = setupToasts({
+      data: context.data,
+      storage: context.storage,
+      ui: {
+        toast: {
+          show: (toast) => {
+            const sessionID = toast.sessionID;
+            const url = toast.message.split("\n")[0];
+            if (!sessionID || !url) return;
+            void context.client.session
+              .get({ sessionID })
+              .then((session) => {
+                notifications.add(sessionID, url, session.location.directory);
+              })
+              .catch(() => {});
+          },
+        },
+      },
+    });
+    const stopView = context.ui.slot({
+      append: "app",
+      render: () =>
+        createComponent(NotificationView, {
+          theme: context.theme,
+          get notices() {
+            return notices();
+          },
+          act: (key, enabled) => notifications.act(key, enabled),
+          refresh: (key) => notifications.refresh(key),
+          dismiss: (key) => notifications.dismiss(key),
+        }),
+    });
+    context.keymap.layer(() => ({
+      commands: [
+        {
+          id: "pr-monitor.notifications",
+          title: "PR monitor notifications",
+          group: "PR monitor",
+          palette: true,
+          slash: { name: "pr-monitor-notifications" },
+          run: async () => {
+            const selected = await context.ui.dialog.select({
+              title: "PR monitor notifications",
+              options: notices().map((notice) => ({
+                title: notice.url,
+                value: notice.key,
+              })),
+            });
+            const notice = notices().find((item) => item.key === selected);
+            if (!notice) return;
+            await notifications.refresh(notice.key);
+            const current = notices().find((item) => item.key === notice.key);
+            if (!current || current.busy || !current.status) return;
+            const enabled =
+              current.status.enabled && current.status.url === current.url;
+            const action = await context.ui.dialog.select({
+              title: current.url,
+              options: [
+                {
+                  title: enabled ? "Turn off monitoring" : "Turn on monitoring",
+                  value: "toggle",
+                },
+                { title: "Dismiss", value: "dismiss" },
+              ],
+            });
+            if (action === "toggle")
+              await notifications.act(current.key, !enabled);
+            if (action === "dismiss") notifications.dismiss(current.key);
+          },
+        },
+      ],
+    }));
+    const timer = setInterval(() => {
+      void notifications.refreshAll();
+    }, 15_000);
+    return () => {
+      clearInterval(timer);
+      stopMessages();
+      stopView();
+      notifications.close();
+    };
+  },
 });

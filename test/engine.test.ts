@@ -127,6 +127,22 @@ function comment(id: string, overrides: Partial<Comment> = {}): Comment {
   };
 }
 
+test("UI status is read-only, session-scoped and reflects explicit controls", async () => {
+  const f = fixture();
+  assert.deepEqual(f.monitor.view("s1"), { enabled: false, url: null });
+  await f.enable();
+  assert.deepEqual(f.monitor.view("s1"), { enabled: true, url });
+  assert.deepEqual(f.monitor.view("other-session"), {
+    enabled: false,
+    url: null,
+  });
+  const reads = f.calls();
+  f.monitor.view("s1");
+  assert.equal(f.calls(), reads);
+  await f.monitor.command("s1", "off");
+  assert.deepEqual(f.monitor.view("s1"), { enabled: false, url });
+});
+
 test("strict PR parsing and persisted storage validation", () => {
   assert.equal(parsePR("https://github.com/Acme/Project/pull/42/").url, url);
   for (const bad of [

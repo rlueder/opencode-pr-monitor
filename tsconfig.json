@@ -1,6 +1,8 @@
 {
   "compilerOptions": {
     "target": "ES2023",
+    "jsx": "preserve",
+    "jsxImportSource": "@opentui/solid",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
@@ -15,7 +17,9 @@
     "index.ts",
     "tui.ts",
     "src/**/*.ts",
+    "src/**/*.tsx",
     "test/**/*.ts",
-    "scripts/**/*.ts"
+    "scripts/**/*.ts",
+    "scripts/**/*.tsx"
   ]
 }

@@ -53,33 +53,45 @@ edit may require a user-managed reload. This implementation does not restart it.
 
 The package exports a native `./tui` entrypoint, loaded alongside the server
 plugin in compatible OpenCode V2 terminals. The root `tui.ts` also supports local
-directory discovery. No additional runtime UI dependencies or custom rendering
-are needed; the terminal provides its UI runtime. `solid-js` is a development-only
-dependency for importing the published TUI API in isolated tests.
+directory discovery. The terminal supplies OpenTUI and Solid; the package declares
+them as optional peers so the server plugin remains usable on its own. Development
+installs include their types for checking the custom JSX view. OpenTUI 0.6.8's Node
+renderer requires Node 26.4+, or Bun 1.3.14+; ordinary controller tests do not load
+the renderer. The lockfile overrides Seroval to 1.7.2 to avoid known vulnerabilities
+in the serializer used by the renderer's pinned Solid peer.
 
-When completed assistant text contains a link such as
-`https://github.com/OWNER/REPO/pull/42`, the terminal shows a ten-second
-**Pull request mentioned** information toast with:
+When completed assistant text contains a PR link, a nonmodal notification appears
+at the bottom right of the terminal. It stays until dismissed, with clickable
+**Turn on**, **Turn off**, **Refresh** and **Dismiss** controls. The on/off label
+comes from actual server status, not an optimistic local toggle. While an action
+or permission request is pending, the toggle is disabled. Errors appear inline.
+**Turn on** uses the existing `/pr-monitor on <URL>` command and normal permission
+prompt. **Turn off** uses `/pr-monitor off`, only if the session still monitors
+that PR. Dismiss closes the notice without disabling monitoring or cancelling an
+already submitted action. No auto-merge or extra write permissions are granted.
+Buttons use the current OpenCode theme's hover, pressed and disabled colors.
+There are no animations; pending controls stay visible but cannot be activated.
 
-```text
-Enable monitoring: /pr-monitor on https://github.com/owner/repo/pull/42
-```
+For keyboard access, run `/pr-monitor-notifications` or select **PR monitor
+notifications** in the command palette. Choose a PR, then turn monitoring on/off
+or dismiss it. Up to five notifications are retained; the newest is shown, and
+dismissing it reveals an older one. Visible notification statuses refresh every
+15 seconds through a read-only RPC, without GitHub or model calls.
 
-The toast is associated with the originating session using OpenCode's native
-session navigation. The public toast API does not support a custom enable button;
-run the displayed command in that session to opt in. Markdown links, inline code,
-query strings and fragment links are recognized. URLs only in user input, tool
-output or reasoning do not trigger it. A URL mention alone does not establish
-that a PR was created, belongs to the session, or is eligible for monitoring;
-the existing enable checks still enforce that boundary.
+Markdown links, inline code, query strings and fragment links are recognized.
+URLs only in user input, tool output or reasoning do not trigger it. A URL mention
+alone does not establish that a PR was created, belongs to the session, or is
+eligible for monitoring; the existing enable checks still enforce that boundary.
 
 Notifications are deduplicated per canonical PR URL and session for the current
 TUI lifetime, including plugin reloads. Memory keeps up to 2,000 keys; older keys
 can notify again after eviction. Events timestamped before plugin setup are
 ignored instead of notifying about replayed history. Notifications require live
 events with server and client clocks reasonably aligned. Existing chat history
-is not scanned. No GitHub calls, model prompts or permission changes are made by
-the toast. Cleanup unsubscribes from chat events. This is a terminal feature,
+is not scanned. Detection alone makes no GitHub calls, model prompts or permission
+changes. Cleanup unsubscribes from chat events and aborts UI reads. An already
+submitted command may still complete on the server after the UI unloads; use
+`/pr-monitor status` and `off` if needed. This is a terminal feature,
 not a desktop/web checkbox or OS notification.
 
 ## Commands
@@ -178,8 +190,8 @@ the session inbox before allowing it to run if necessary.
   per body. Remaining events wait for another budgeted wakeup. Comment edits and
   review-thread resolution changes are not separate events. Failure transitions
   are observed by polling, so brief intermediate states may be missed.
-- Native slash commands remain the monitoring control surface; the TUI only
-  notifies about assistant-mentioned PR URLs. No desktop checkbox, separate review
+- Native slash commands and explicit TUI actions control monitoring. Detection
+  only notifies about assistant-mentioned PR URLs. No desktop checkbox, separate review
   model, auto-merge, archive, live log streaming, or automatic PR binding.
 - The host/service **must remain running and the location loaded**. Default
   OpenCode location idling may unload the plugin. If desired, the user can set
@@ -213,10 +225,14 @@ GraphQL schema, downloaded without credentials by the optional
 responses. No query has been executed against an authenticated live PR; review
 this limitation before enabling monitoring.
 
-Toast tests cover URL recognition/rejection, normalization, session-linked
-notifications, deduplication/reload, history replay, bounded memory, failed toast
-delivery and unsubscribe cleanup. The TUI entrypoint imports and typechecks
-against the published V2 API. No live terminal rendering test has been run.
+Notification tests cover URL recognition/rejection, normalization, session-linked
+notifications, deduplication/reload, history replay, bounded memory, cleanup,
+explicit on/off actions, permission errors, concurrent clicks, external state
+changes and late async callbacks. The custom TUI view and RPC typecheck against
+the published V2 API. Node tests exercise the controller, not terminal rendering.
+`npm run test:ui` uses Bun 1.3.14+ and a headless OpenTUI renderer to verify
+hover/leave styling, real on/off and dismiss mouse clicks, right-click rejection
+and narrow-terminal layout. CI runs both suites with Node 26 and Bun 1.3.14.
 
 The implementation follows the full V2 plugin, commands, plugin loading and
 config guides, plus the V2 OpenAPI admission contract:

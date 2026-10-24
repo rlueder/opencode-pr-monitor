@@ -16,6 +16,12 @@ export class Monitor {
   async init() {
     this.binding = await this.ports.load();
   }
+  view(session: string) {
+    const b = this.binding;
+    return b?.session === session
+      ? { enabled: b.enabled, url: b.pr.url }
+      : { enabled: false, url: null };
+  }
   status(session: string) {
     const b = this.binding;
     if (!b || b.session !== session)

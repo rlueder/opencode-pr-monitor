@@ -9,8 +9,8 @@ import {
   watchPRMentions,
   type ToastBoundary,
   type ToastHistory,
+  setupToasts,
 } from "../src/pr-toast.ts";
-import tui, { setupToasts } from "../src/tui.ts";
 
 const url = "https://github.com/owner/repo/pull/42";
 
@@ -165,11 +165,6 @@ test("subscription cleanup stops future notifications", () => {
   cleanup();
   handler?.(event("https://github.com/owner/repo/pull/43"));
   assert.equal(toasts.length, 1);
-});
-
-test("native TUI entrypoint is separate from server and loads without a service", () => {
-  assert.equal(tui.id, "opencode.pr-monitor.tui");
-  assert.equal(typeof tui.setup, "function");
 });
 
 test("TUI subscribes only to completed assistant text, not user/tool/reasoning/deltas", () => {

@@ -71,15 +71,33 @@ No auto-merge or archive.
 Expose a separate native V2 `./tui` entrypoint. Listen to `session.text.ended`
 for completed assistant-visible text, not reasoning, user input or tool output.
 Recognize exact GitHub.com PR links in plain text and Markdown, normalize case,
-ignore URL query/fragment suffixes, and show a session-linked native information
-toast with `/pr-monitor on <URL>`. A mention is not evidence of PR creation or
+ignore URL query/fragment suffixes, and show a session-linked notification.
+A mention is not evidence of PR creation or
 ownership; label it as a mention, not as a newly created PR or enabled monitor.
 Never run a command, call GitHub, or change permissions from detection.
 
 Notify once per canonical PR URL per session per TUI lifetime, with a bounded
 2,000-key memory store surviving plugin reload. Ignore events predating setup
 so history replay does not generate notifications. Different sessions may each
-notify for the same PR. Unsubscribe on cleanup. Use documented toast fields only,
-not unsupported buttons or desktop UI hooks. Backend remains usable without TUI.
+notify for the same PR. Unsubscribe on cleanup. Use documented TUI slots rather
+than unsupported native toast action fields or desktop UI hooks. Backend remains usable without TUI.
 Test detection, normalization, duplicates, session isolation, history replay,
 ignored content types, reload and cleanup against published V2 types.
+
+## Actionable notification
+
+Replace the text-only native toast with a custom, nonmodal TUI `app` slot.
+Show session-associated PR notifications with clickable Turn on/Turn off,
+Refresh and Dismiss controls and keyboard access through a palette command.
+Do not expire a notification while the user is considering activation or a
+permission prompt. Read actual monitoring state using a read-only location-scoped
+RPC, then invoke the existing server command on explicit UI action. Never add an
+RPC that bypasses permission checks or enables monitoring on URL detection.
+Verify the session location, prevent duplicate actions, report errors inline,
+re-read state after commands and do not disable a different PR implicitly.
+Use native theme tokens for hovered, pressed and disabled button colors. Disabled
+controls remain visible and ignore clicks; pointer departure resets button state.
+Bound the visible list, clean up listeners and ignore late async UI updates after
+unload. Notifications describe mentions, not confirmed PR creation. Keep monitor
+state on the server and preserve working slash commands. Document OpenTUI peers,
+verification limitations, and test the action controller separately from rendering.
