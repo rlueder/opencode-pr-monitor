@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="360" viewBox="180 312 820 360">
+<title>OpenCode PR monitor: actual component capture with sample monitoring state</title>
+<rect x="180" y="312" width="820" height="360" fill="#282a36"/>
+<g font-family="Menlo,DejaVu Sans Mono,monospace" font-size="16"><rect x="190" y="336" width="800" height="24" fill="rgb(40,42,54)"/>
+<text x="190" y="354" textLength="800" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">┌──────────────────────────────────────────────────────────────────────────────┐</text>
+<rect x="190" y="360" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="190" y="378" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="200" y="360" width="780" height="24" fill="rgb(40,42,54)"/>
+<rect x="980" y="360" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="980" y="378" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="190" y="384" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="190" y="402" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="200" y="384" width="10" height="24" fill="rgb(40,42,54)"/>
+<rect x="210" y="384" width="260" height="24" fill="rgb(40,42,54)"/>
+<text x="210" y="402" textLength="260" lengthAdjust="spacingAndGlyphs" fill="rgb(248,248,242)" xml:space="preserve">Pull request mentioned (1)</text>
+<rect x="470" y="384" width="510" height="24" fill="rgb(40,42,54)"/>
+<rect x="980" y="384" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="980" y="402" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="190" y="408" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="190" y="426" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="200" y="408" width="780" height="24" fill="rgb(40,42,54)"/>
+<rect x="980" y="408" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="980" y="426" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="190" y="432" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="190" y="450" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="200" y="432" width="10" height="24" fill="rgb(40,42,54)"/>
+<rect x="210" y="432" width="530" height="24" fill="rgb(40,42,54)"/>
+<text x="210" y="450" textLength="530" lengthAdjust="spacingAndGlyphs" fill="rgb(248,248,242)" xml:space="preserve">https://github.com/rlueder/opencode-pr-monitor/pull/1</text>
+<rect x="740" y="432" width="240" height="24" fill="rgb(40,42,54)"/>
+<rect x="980" y="432" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="980" y="450" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="190" y="456" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="190" y="474" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="200" y="456" width="780" height="24" fill="rgb(40,42,54)"/>
+<rect x="980" y="456" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="980" y="474" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="190" y="480" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="190" y="498" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="200" y="480" width="10" height="24" fill="rgb(40,42,54)"/>
+<rect x="210" y="480" width="160" height="24" fill="rgb(40,42,54)"/>
+<text x="210" y="498" textLength="160" lengthAdjust="spacingAndGlyphs" fill="rgb(167,169,189)" xml:space="preserve">Monitoring is on</text>
+<rect x="370" y="480" width="610" height="24" fill="rgb(40,42,54)"/>
+<rect x="980" y="480" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="980" y="498" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="190" y="504" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="190" y="522" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="200" y="504" width="780" height="24" fill="rgb(40,42,54)"/>
+<rect x="980" y="504" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="980" y="522" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="190" y="528" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="190" y="546" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="200" y="528" width="10" height="24" fill="rgb(40,42,54)"/>
+<rect x="210" y="528" width="10" height="24" fill="rgb(189,147,249)"/>
+<rect x="220" y="528" width="100" height="24" fill="rgb(189,147,249)"/>
+<text x="220" y="546" textLength="100" lengthAdjust="spacingAndGlyphs" fill="rgb(40,42,54)" xml:space="preserve">[Turn off]</text>
+<rect x="320" y="528" width="10" height="24" fill="rgb(189,147,249)"/>
+<rect x="330" y="528" width="20" height="24" fill="rgb(40,42,54)"/>
+<rect x="350" y="528" width="10" height="24" fill="rgb(68,71,90)"/>
+<rect x="360" y="528" width="90" height="24" fill="rgb(68,71,90)"/>
+<text x="360" y="546" textLength="90" lengthAdjust="spacingAndGlyphs" fill="rgb(248,248,242)" xml:space="preserve">[Refresh]</text>
+<rect x="450" y="528" width="10" height="24" fill="rgb(68,71,90)"/>
+<rect x="460" y="528" width="20" height="24" fill="rgb(40,42,54)"/>
+<rect x="480" y="528" width="10" height="24" fill="rgb(68,71,90)"/>
+<rect x="490" y="528" width="90" height="24" fill="rgb(68,71,90)"/>
+<text x="490" y="546" textLength="90" lengthAdjust="spacingAndGlyphs" fill="rgb(248,248,242)" xml:space="preserve">[Dismiss]</text>
+<rect x="580" y="528" width="10" height="24" fill="rgb(68,71,90)"/>
+<rect x="590" y="528" width="390" height="24" fill="rgb(40,42,54)"/>
+<rect x="980" y="528" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="980" y="546" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="190" y="552" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="190" y="570" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="200" y="552" width="780" height="24" fill="rgb(40,42,54)"/>
+<rect x="980" y="552" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="980" y="570" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="190" y="576" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="190" y="594" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="200" y="576" width="10" height="24" fill="rgb(40,42,54)"/>
+<rect x="210" y="576" width="350" height="24" fill="rgb(40,42,54)"/>
+<text x="210" y="594" textLength="350" lengthAdjust="spacingAndGlyphs" fill="rgb(167,169,189)" xml:space="preserve">Keyboard: /pr-monitor-notifications</text>
+<rect x="560" y="576" width="420" height="24" fill="rgb(40,42,54)"/>
+<rect x="980" y="576" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="980" y="594" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="190" y="600" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="190" y="618" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="200" y="600" width="780" height="24" fill="rgb(40,42,54)"/>
+<rect x="980" y="600" width="10" height="24" fill="rgb(40,42,54)"/>
+<text x="980" y="618" textLength="10" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">│</text>
+<rect x="190" y="624" width="800" height="24" fill="rgb(40,42,54)"/>
+<text x="190" y="642" textLength="800" lengthAdjust="spacingAndGlyphs" fill="rgb(98,114,164)" xml:space="preserve">└──────────────────────────────────────────────────────────────────────────────┘</text></g>
+</svg>

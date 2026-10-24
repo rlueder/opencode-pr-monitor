@@ -1,0 +1,68 @@
+{
+  "name": "opencode-pr-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Explicit, session-bound pull request monitoring for OpenCode V2",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tui": "./src/tui.ts"
+  },
+  "files": [
+    "index.ts",
+    "tui.ts",
+    "src",
+    "docs",
+    "README.md",
+    "SPEC.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "test:ui": "bun --preload @opentui/solid/preload scripts/smoke-ui.tsx",
+    "capture:toast": "bun --preload @opentui/solid/preload scripts/capture-toast.tsx",
+    "validate:github-schema": "node --import tsx scripts/validate-github-schema.ts",
+    "format": "prettier --write index.ts tui.ts src test scripts docs/*.md README.md SPEC.md package.json tsconfig.json",
+    "format:check": "prettier --check index.ts tui.ts src test scripts docs/*.md README.md SPEC.md package.json tsconfig.json",
+    "check": "npm run format:check && npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.1.4"
+  },
+  "peerDependencies": {
+    "@opentui/core": ">=0.6.8",
+    "@opentui/solid": ">=0.6.8",
+    "solid-js": ">=1.9.12"
+  },
+  "peerDependenciesMeta": {
+    "@opentui/core": {
+      "optional": true
+    },
+    "@opentui/solid": {
+      "optional": true
+    },
+    "solid-js": {
+      "optional": true
+    }
+  },
+  "overrides": {
+    "seroval": "1.7.2"
+  },
+  "devDependencies": {
+    "@opencode/theme": "2.1.4",
+    "@opentui/core": "0.6.8",
+    "@opentui/solid": "0.6.8",
+    "@resvg/resvg-js": "2.6.2",
+    "@types/node": "^22.0.0",
+    "graphql": "16.11.0",
+    "prettier": "3.6.2",
+    "solid-js": "1.9.12",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
