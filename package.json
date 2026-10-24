@@ -1,0 +1,42 @@
+{
+  "name": "opencode-pr-monitor",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Explicit, session-bound pull request monitoring for OpenCode V2",
+  "license": "MIT",
+  "exports": {
+    ".": "./src/index.ts",
+    "./tui": "./src/tui.ts"
+  },
+  "files": [
+    "index.ts",
+    "tui.ts",
+    "src",
+    "README.md",
+    "SPEC.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test test/*.test.ts",
+    "validate:github-schema": "node --import tsx scripts/validate-github-schema.ts",
+    "format": "prettier --write index.ts tui.ts src test scripts README.md SPEC.md package.json tsconfig.json",
+    "format:check": "prettier --check index.ts tui.ts src test scripts README.md SPEC.md package.json tsconfig.json",
+    "check": "npm run format:check && npm run typecheck && npm test"
+  },
+  "dependencies": {
+    "@opencode/plugin": "2.1.4"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "graphql": "16.11.0",
+    "prettier": "3.6.2",
+    "solid-js": "^1.9.17",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
