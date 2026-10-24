@@ -120,3 +120,13 @@ cells and colors to SVG/PNG with a reproducible development script. Label this
 as a headless component capture with sample state, not a live desktop screenshot
 or proof of monitoring. Do not capture unrelated desktop/chat data or change
 monitoring state. Inspect the image before referencing it in README.
+
+## Composer overlap regression
+
+Reproduce the screenshot with an actual focused textarea overlapping the toast's
+action row. Cover foreground text, opaque backgrounds and mouse hit-testing,
+not merely an isolated toast. Give notifications a layer above composer content
+and below blocking dialogs. Confirm typing still reaches the focused editor,
+toast clicks do not fall through, and hiding the toast reveals the intact editor.
+Keep native permission dialogs above the notification. Do not patch OpenCode
+or classify this as an upstream defect unless a minimal renderer test supports it.

@@ -240,7 +240,10 @@ changes and late async callbacks. The custom TUI view and RPC typecheck against
 the published V2 API. Node tests exercise the controller, not terminal rendering.
 `npm run test:ui` uses Bun 1.3.14+ and a headless OpenTUI renderer to verify
 hover/leave styling, real on/off and dismiss mouse clicks, right-click rejection
-and narrow-terminal layout. CI runs both suites with Node 26 and Bun 1.3.14.
+and narrow-terminal layout. It also overlaps a focused textarea with the controls,
+checks that the toast paints and receives clicks above it, verifies continued
+typing and editor restoration after dismiss, and keeps blocking dialogs above
+the toast. CI runs both suites with Node 26 and Bun 1.3.14.
 
 The implementation follows the full V2 plugin, commands, plugin loading and
 config guides, plus the V2 OpenAPI admission contract:

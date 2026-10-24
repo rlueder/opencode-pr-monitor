@@ -2,6 +2,9 @@ import { createSignal, Show } from "solid-js";
 import type { ResolvedTheme } from "@opencode/theme/tui";
 import type { Notification } from "./notification.ts";
 
+// Above composer content (1000), below blocking dialogs (3000).
+export const NOTIFICATION_LAYER = 2000;
+
 type ButtonColors = {
   text: { action: Pick<ResolvedTheme["text"]["action"], "secondary"> };
   background: {
@@ -72,7 +75,7 @@ export function NotificationView(props: {
           right={1}
           width="90%"
           maxWidth={80}
-          zIndex={100}
+          zIndex={NOTIFICATION_LAYER}
           border
           borderColor={props.theme.border.base}
           backgroundColor={props.theme.background.raised.base}
