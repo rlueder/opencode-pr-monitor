@@ -82,8 +82,8 @@ export class Monitor {
     ]);
     await this.validSession(session, signal);
     if (signal.aborted || this.closed) throw new Error("Enable cancelled");
-    this.validate(local, snap, pr.repo);
     if (snap.state !== "open") throw new Error("PR is not open");
+    this.validate(local, snap, pr.repo);
     this.binding = {
       version: 1,
       session,

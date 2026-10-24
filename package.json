@@ -22,6 +22,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "test:ui": "bun --preload @opentui/solid/preload scripts/smoke-ui.tsx",
+    "test:ui:ghost": "bun --preload @opentui/solid/preload scripts/smoke-ghost.jsx",
     "capture:toast": "bun --preload @opentui/solid/preload scripts/capture-toast.tsx",
     "validate:github-schema": "node --import tsx scripts/validate-github-schema.ts",
     "format": "prettier --write index.ts tui.ts src test scripts docs/*.md README.md SPEC.md package.json tsconfig.json",
