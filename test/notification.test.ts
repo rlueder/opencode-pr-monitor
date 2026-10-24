@@ -122,6 +122,50 @@ test("dismiss does not disable monitoring", async () => {
   assert.deepEqual(h.commands, []);
 });
 
+test("mentioning the same PR after dismiss reopens it without enabling monitoring", async () => {
+  const h = await ready();
+  h.notifications.dismiss(key);
+  h.notifications.add("ses_one", url, directory);
+  await Promise.resolve();
+  assert.equal(h.shown().length, 1);
+  assert.equal(h.shown()[0]?.url, url);
+  assert.deepEqual(h.commands, []);
+});
+
+test("a repeat mention promotes the existing notice instead of duplicating it", async () => {
+  const h = await ready();
+  h.notifications.add("ses_one", other, directory);
+  await Promise.resolve();
+  assert.equal(h.shown().at(-1)?.url, other);
+  h.notifications.add("ses_one", url, directory);
+  await Promise.resolve();
+  assert.equal(h.shown().length, 2);
+  assert.equal(h.shown().at(-1)?.url, url);
+  assert.deepEqual(h.commands, []);
+});
+
+test("a repeat mention preserves an in-flight action and its pending permission", async () => {
+  const h = await ready();
+  let finish = () => {};
+  let commands = 0;
+  h.ports.command = async () => {
+    commands++;
+    return new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+  };
+  const pending = h.notifications.act(key, true);
+  await Promise.resolve();
+  h.notifications.add("ses_one", url, directory);
+  assert.equal(h.shown()[0]?.busy, true);
+  assert.equal(commands, 1);
+  h.setStatus({ enabled: true, url });
+  finish();
+  await pending;
+  assert.equal(h.shown()[0]?.status?.enabled, true);
+  assert.equal(h.shown()[0]?.error, null);
+});
+
 test("bounded queue preserves session isolation and deduplicates notices", async () => {
   const h = await ready();
   h.notifications.add("ses_one", url, directory);

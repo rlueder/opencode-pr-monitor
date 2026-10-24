@@ -4,6 +4,7 @@ import { setupToasts } from "./pr-toast.ts";
 import { Notifications, type Notification } from "./notification.ts";
 import { NotificationView } from "./notification-view.tsx";
 import { decodeStatus, MonitorUI } from "./rpc.ts";
+import { parsePR } from "./types.ts";
 
 export default Plugin.define({
   id: "opencode.pr-monitor.tui",
@@ -80,8 +81,34 @@ export default Plugin.define({
           title: "PR monitor notifications",
           group: "PR monitor",
           palette: true,
-          slash: { name: "pr-monitor-notifications" },
-          run: async () => {
+          slash: { name: "pr-monitor-notifications", arguments: true },
+          run: async (input) => {
+            if (input?.trim()) {
+              try {
+                const url = parsePR(input.trim()).url;
+                const route = context.ui.router.current();
+                if (route.type !== "session")
+                  throw new Error("Open a session first.");
+                const session = await context.client.session.get({
+                  sessionID: route.sessionID,
+                });
+                notifications.add(
+                  route.sessionID,
+                  url,
+                  session.location.directory,
+                );
+              } catch (error) {
+                context.ui.toast.show({
+                  title: "PR monitor",
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : "Could not show notification",
+                  variant: "error",
+                });
+              }
+              return;
+            }
             const selected = await context.ui.dialog.select({
               title: "PR monitor notifications",
               options: notices().map((notice) => ({

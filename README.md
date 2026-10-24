@@ -6,7 +6,7 @@ failures, merge conflicts, and new eligible reviewer feedback. The existing
 session investigates and fixes problems under its normal instructions and
 permissions. The plugin itself only reads Git and GitHub.
 
-Its companion terminal UI plugin shows a toast when an assistant mentions a
+Its companion terminal UI plugin shows a toast when a chat message mentions a
 GitHub PR URL in chat, including after creating a PR. It offers the command to
 enable monitoring without enabling it automatically.
 
@@ -60,7 +60,7 @@ renderer requires Node 26.4+, or Bun 1.3.14+; ordinary controller tests do not l
 the renderer. The lockfile overrides Seroval to 1.7.2 to avoid known vulnerabilities
 in the serializer used by the renderer's pinned Solid peer.
 
-When completed assistant text contains a PR link, a nonmodal notification appears
+When completed assistant text or an admitted user/status message contains a PR link, a nonmodal notification appears
 at the bottom right of the terminal. It stays until dismissed, with clickable
 **Turn on**, **Turn off**, **Refresh** and **Dismiss** controls. The on/off label
 comes from actual server status, not an optimistic local toggle. While an action
@@ -77,14 +77,20 @@ notifications** in the command palette. Choose a PR, then turn monitoring on/off
 or dismiss it. Up to five notifications are retained; the newest is shown, and
 dismissing it reveals an older one. Visible notification statuses refresh every
 15 seconds through a read-only RPC, without GitHub or model calls.
+To explicitly reopen a notification in the current session, run
+`/pr-monitor-notifications https://github.com/OWNER/REPO/pull/42`. This only shows
+the controls; it never enables monitoring.
 
 Markdown links, inline code, query strings and fragment links are recognized.
-URLs only in user input, tool output or reasoning do not trigger it. A URL mention
+Tool output, reasoning and inbox control items do not trigger it. A URL mention
 alone does not establish that a PR was created, belongs to the session, or is
 eligible for monitoring; the existing enable checks still enforce that boundary.
 
-Notifications are deduplicated per canonical PR URL and session for the current
-TUI lifetime, including plugin reloads. Memory keeps up to 2,000 keys; older keys
+Notifications are deduplicated per canonical PR URL, message and session, including
+plugin reloads. A new message mentioning the same PR reopens a dismissed notice
+or brings the existing one to the front without resetting monitoring or interrupting
+an in-flight action. Repeated text blocks or replay of the same message do not
+notify again. Memory keeps up to 2,000 keys; older keys
 can notify again after eviction. Events timestamped before plugin setup are
 ignored instead of notifying about replayed history. Notifications require live
 events with server and client clocks reasonably aligned. Existing chat history
@@ -191,7 +197,7 @@ the session inbox before allowing it to run if necessary.
   review-thread resolution changes are not separate events. Failure transitions
   are observed by polling, so brief intermediate states may be missed.
 - Native slash commands and explicit TUI actions control monitoring. Detection
-  only notifies about assistant-mentioned PR URLs. No desktop checkbox, separate review
+  only notifies about chat-mentioned PR URLs. No desktop checkbox, separate review
   model, auto-merge, archive, live log streaming, or automatic PR binding.
 - The host/service **must remain running and the location loaded**. Default
   OpenCode location idling may unload the plugin. If desired, the user can set

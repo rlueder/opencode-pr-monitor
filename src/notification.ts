@@ -28,7 +28,16 @@ export class Notifications {
   add(sessionID: string, url: string, directory: string) {
     if (this.controller.signal.aborted) return;
     const key = JSON.stringify([sessionID, url]);
-    if (this.notices.some((notice) => notice.key === key)) return;
+    const existing = this.notices.find((notice) => notice.key === key);
+    if (existing) {
+      // A new chat message may mention an already visible PR. Promote the same
+      // notice without discarding a permission request or in-flight action.
+      this.notices = this.notices.filter((notice) => notice !== existing);
+      this.notices.push(existing);
+      this.emit();
+      void this.refresh(key);
+      return;
+    }
     // Never evict a notification whose explicit action is still running.
     if (this.notices.length >= 5) {
       const removable = this.notices.findIndex((notice) => !notice.busy);

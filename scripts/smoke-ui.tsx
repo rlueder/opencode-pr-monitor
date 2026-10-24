@@ -4,7 +4,8 @@ import { RGBA } from "@opentui/core";
 import { createSignal } from "solid-js";
 import type { StatefulColor } from "@opencode/theme/tui";
 import { NotificationView } from "../src/notification-view.tsx";
-import type { Notification } from "../src/notification.ts";
+import { Notifications, type Notification } from "../src/notification.ts";
+import { notifyPRMentions, type ToastBoundary } from "../src/pr-toast.ts";
 
 const url = "https://github.com/owner/repo/pull/42";
 const color = RGBA.fromHex("#cccccc");
@@ -27,18 +28,45 @@ const button: StatefulColor = {
           ? hover
           : color,
 };
-const [notices, setNotices] = createSignal<Notification[]>([
-  {
-    key: "test",
-    sessionID: "ses_test",
-    directory: "/test",
-    url,
-    status: { enabled: false, url: null },
-    busy: false,
-    error: null,
-  },
-]);
+const [notices, setNotices] = createSignal<Notification[]>([]);
 const actions: boolean[] = [];
+let enabled = false;
+const notifications = new Notifications({
+  changed: (items) => setNotices(items),
+  status: async () => ({ enabled, url }),
+  command: async (_notice, text) => {
+    enabled = text.startsWith("on ");
+    actions.push(enabled);
+  },
+});
+const boundary: ToastBoundary = {
+  startedAt: 0,
+  history: { seen: [] },
+  update: (mutate) => mutate(boundary.history),
+  show: (toast) =>
+    notifications.add(
+      toast.sessionID ?? "",
+      toast.message.split("\n")[0] ?? "",
+      "/test",
+    ),
+};
+function mention(messageID: string) {
+  notifyPRMentions(
+    {
+      id: `evt_${messageID}`,
+      type: "session.text.ended",
+      created: Date.now(),
+      durable: { aggregateID: "ses_test", seq: 1, version: 1 },
+      data: {
+        sessionID: "ses_test",
+        assistantMessageID: messageID,
+        ordinal: 0,
+        text: url,
+      },
+    },
+    boundary,
+  );
+}
 const view = await testRender(
   () => (
     <NotificationView
@@ -51,20 +79,16 @@ const view = await testRender(
         },
       }}
       notices={notices()}
-      act={async (_key, enabled) => {
-        actions.push(enabled);
-        setNotices((items) =>
-          items.map((item) => ({ ...item, status: { enabled, url } })),
-        );
-      }}
-      refresh={async () => {}}
-      dismiss={() => setNotices([])}
+      act={(key, value) => notifications.act(key, value)}
+      refresh={(key) => notifications.refresh(key)}
+      dismiss={(key) => notifications.dismiss(key)}
     />
   ),
   { width: 100, height: 32 },
 );
 
 try {
+  mention("message_one");
   async function click(label: string, button: 0 | 2 = 0) {
     const frame = await view.waitForFrame((value) => value.includes(label));
     const lines = frame.split("\n");
@@ -117,9 +141,26 @@ try {
   );
   await click("[Dismiss]");
   await view.waitForFrame((frame) => !frame.includes("Pull request mentioned"));
+  mention("message_one");
+  await view.flush();
+  assert.ok(
+    !view.captureCharFrame().includes("Pull request mentioned"),
+    "Replayed message stays dismissed",
+  );
+  mention("message_two");
+  await view.waitForFrame(
+    (frame) =>
+      frame.includes("Pull request mentioned") && frame.includes("[Turn on]"),
+  );
+  assert.deepEqual(
+    actions,
+    [true, false],
+    "New mention only reopens the controls",
+  );
   console.log(
-    "Headless TUI smoke: render, hover/leave, on/off mouse clicks, right-click guard, resize and dismiss passed.",
+    "Headless TUI smoke: render, hover/leave, on/off clicks, disabled/right-click guards, resize, dismiss, replay suppression and new-message reopening passed.",
   );
 } finally {
+  notifications.close();
   await view.dispose();
 }

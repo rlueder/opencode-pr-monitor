@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import type { SessionTextEnded } from "@opencode/client";
+import type { SessionTextEnded, SessionInboxEnqueued } from "@opencode/client";
 import type { ToastOptions } from "@opencode/plugin/tui/context";
 import {
   mentionedPRs,
@@ -10,6 +10,7 @@ import {
   type ToastBoundary,
   type ToastHistory,
   setupToasts,
+  type MentionEvent,
 } from "../src/pr-toast.ts";
 
 const url = "https://github.com/owner/repo/pull/42";
@@ -18,6 +19,7 @@ function event(
   text: string,
   sessionID = "ses_one",
   created = 100,
+  messageID = "msg_one",
 ): SessionTextEnded {
   return {
     id: "evt_one",
@@ -26,9 +28,26 @@ function event(
     durable: { aggregateID: sessionID, seq: 1, version: 1 },
     data: {
       sessionID,
-      assistantMessageID: "msg_one",
+      assistantMessageID: messageID,
       ordinal: 0,
       text,
+    },
+  };
+}
+
+function inbox(
+  text: string,
+  type: "user" | "synthetic" = "user",
+): SessionInboxEnqueued {
+  return {
+    id: "evt_inbox",
+    created: 100,
+    type: "session.inbox.enqueued",
+    durable: { aggregateID: "ses_one", seq: 1, version: 1 },
+    data: {
+      sessionID: "ses_one",
+      inboxID: `msg_${type}`,
+      item: { type, payload: { text }, delivery: "queue" },
     },
   };
 }
@@ -96,7 +115,7 @@ test("shows a session-linked informational toast without claiming creation or ac
   ]);
 });
 
-test("repeated blocks, messages and reconnect replay notify only once per session/PR", () => {
+test("repeated blocks and replay notify once per message/PR, not once per session", () => {
   const { boundary, toasts } = harness();
   for (let i = 0; i < 5; i++)
     notifyPRMentions(event(`${url} ${url}#discussion_r1`), boundary);
@@ -108,6 +127,12 @@ test("repeated blocks, messages and reconnect replay notify only once per sessio
     boundary,
   );
   assert.equal(toasts.length, 3);
+  notifyPRMentions(event(url, "ses_one", 100, "msg_two"), boundary);
+  assert.equal(
+    toasts.length,
+    4,
+    "A new message mentioning the same PR notifies again",
+  );
 });
 
 test("memory history survives reload, without storing chat text", () => {
@@ -117,7 +142,7 @@ test("memory history survives reload, without storing chat text", () => {
   notifyPRMentions(event(url), reloaded.boundary);
   assert.equal(reloaded.toasts.length, 0);
   assert.deepEqual(first.boundary.history.seen, [
-    JSON.stringify(["ses_one", url]),
+    JSON.stringify(["ses_one", "msg_one", url]),
   ]);
 });
 
@@ -153,7 +178,7 @@ test("does not remember a notification if the toast API fails", () => {
 
 test("subscription cleanup stops future notifications", () => {
   const { boundary, toasts } = harness();
-  let handler: ((event: SessionTextEnded) => void) | undefined;
+  let handler: ((event: MentionEvent) => void) | undefined;
   const cleanup = watchPRMentions((callback) => {
     handler = callback;
     return () => {
@@ -167,15 +192,15 @@ test("subscription cleanup stops future notifications", () => {
   assert.equal(toasts.length, 1);
 });
 
-test("TUI subscribes only to completed assistant text, not user/tool/reasoning/deltas", () => {
+test("TUI subscribes to completed assistant text and admitted chat messages, cleaning up both", () => {
   const subscriptions: string[] = [];
-  let unsubscribed = false;
+  let unsubscribed = 0;
   const cleanup = setupToasts({
     data: {
       on: (type) => {
         subscriptions.push(type);
         return () => {
-          unsubscribed = true;
+          unsubscribed++;
         };
       },
     },
@@ -187,7 +212,28 @@ test("TUI subscribes only to completed assistant text, not user/tool/reasoning/d
     },
     ui: { toast: { show: () => {} } },
   });
-  assert.deepEqual(subscriptions, ["session.text.ended"]);
+  assert.deepEqual(subscriptions, [
+    "session.text.ended",
+    "session.inbox.enqueued",
+  ]);
   cleanup();
-  assert.equal(unsubscribed, true);
+  assert.equal(unsubscribed, 2);
+});
+
+test("a pasted user PR link and a synthetic status message each notify once", () => {
+  const { boundary, toasts } = harness();
+  const pasted = inbox(url);
+  const status = inbox(`PR monitor: on\n${url}`, "synthetic");
+  for (const e of [pasted, pasted, status, status])
+    notifyPRMentions(e, boundary);
+  assert.equal(toasts.length, 2);
+  assert.equal(toasts[0]?.sessionID, "ses_one");
+});
+
+test("inbox compaction and move controls do not trigger notifications", () => {
+  const { boundary, toasts } = harness();
+  const e = inbox(url);
+  e.data.item = { type: "compaction", payload: {}, delivery: "queue" };
+  notifyPRMentions(e, boundary);
+  assert.equal(toasts.length, 0);
 });

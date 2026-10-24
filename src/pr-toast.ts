@@ -1,9 +1,10 @@
-import type { SessionTextEnded } from "@opencode/client";
+import type { SessionTextEnded, SessionInboxEnqueued } from "@opencode/client";
 import type { ToastOptions } from "@opencode/plugin/tui/context";
 import type { Plugin } from "@opencode/plugin/tui";
 import { parsePR } from "./types.ts";
 
 export const TOAST_HISTORY_LIMIT = 2_000;
+export type MentionEvent = SessionTextEnded | SessionInboxEnqueued;
 
 // Match a whole URL token before parsing, so lookalike hosts and path suffixes
 // cannot be mistaken for a supported PR. Markdown delimiters end the token.
@@ -46,11 +47,18 @@ export function setupToasts(context: {
   ui: Pick<Plugin.Context["ui"], "toast">;
 }): () => void {
   const startedAt = Date.now();
-  const [history, update] = context.storage.memory("pr-mentions/actions-v1", {
+  const [history, update] = context.storage.memory("pr-mentions/messages-v1", {
     initial: { seen: [] as string[] },
   });
   return watchPRMentions(
-    (handler) => context.data.on("session.text.ended", handler),
+    (handler) => {
+      const stopText = context.data.on("session.text.ended", handler);
+      const stopInbox = context.data.on("session.inbox.enqueued", handler);
+      return () => {
+        stopText();
+        stopInbox();
+      };
+    },
     {
       startedAt,
       history,
@@ -61,19 +69,30 @@ export function setupToasts(context: {
 }
 
 export function watchPRMentions(
-  subscribe: (handler: (event: SessionTextEnded) => void) => () => void,
+  subscribe: (handler: (event: MentionEvent) => void) => () => void,
   boundary: ToastBoundary,
 ): () => void {
   return subscribe((event) => notifyPRMentions(event, boundary));
 }
 
 export function notifyPRMentions(
-  event: Pick<SessionTextEnded, "created" | "data">,
+  event: MentionEvent,
   boundary: ToastBoundary,
 ): void {
   if (event.created < boundary.startedAt) return;
-  for (const url of mentionedPRs(event.data.text)) {
-    const key = JSON.stringify([event.data.sessionID, url]);
+  let text: string;
+  let messageID: string;
+  if (event.type === "session.text.ended") {
+    text = event.data.text;
+    messageID = event.data.assistantMessageID;
+  } else {
+    const item = event.data.item;
+    if (item.type !== "user" && item.type !== "synthetic") return;
+    text = item.payload.text;
+    messageID = event.data.inboxID;
+  }
+  for (const url of mentionedPRs(text)) {
+    const key = JSON.stringify([event.data.sessionID, messageID, url]);
     if (boundary.history.seen.includes(key)) continue;
     boundary.show({
       title: "Pull request mentioned",

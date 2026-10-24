@@ -69,14 +69,15 @@ No auto-merge or archive.
 ## PR mention toast
 
 Expose a separate native V2 `./tui` entrypoint. Listen to `session.text.ended`
-for completed assistant-visible text, not reasoning, user input or tool output.
+for completed assistant-visible text and `session.inbox.enqueued` for admitted
+user and synthetic chat messages. Ignore reasoning, tool output and inbox controls.
 Recognize exact GitHub.com PR links in plain text and Markdown, normalize case,
 ignore URL query/fragment suffixes, and show a session-linked notification.
 A mention is not evidence of PR creation or
 ownership; label it as a mention, not as a newly created PR or enabled monitor.
 Never run a command, call GitHub, or change permissions from detection.
 
-Notify once per canonical PR URL per session per TUI lifetime, with a bounded
+Notify once per canonical PR URL per message per session, with a bounded
 2,000-key memory store surviving plugin reload. Ignore events predating setup
 so history replay does not generate notifications. Different sessions may each
 notify for the same PR. Unsubscribe on cleanup. Use documented TUI slots rather
@@ -101,3 +102,9 @@ Bound the visible list, clean up listeners and ignore late async UI updates afte
 unload. Notifications describe mentions, not confirmed PR creation. Keep monitor
 state on the server and preserve working slash commands. Document OpenTUI peers,
 verification limitations, and test the action controller separately from rendering.
+
+Repeat mentions in a new message must reopen a dismissed notice or bring its
+existing notification to the front and refresh it. Streaming text blocks and
+replayed events for the same message/URL must not duplicate it. Multiple mentions
+in one message share one notification. Repeated mentions must not reset monitoring,
+consume repair attempts, or interrupt an in-flight UI action.
