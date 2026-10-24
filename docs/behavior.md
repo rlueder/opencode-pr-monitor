@@ -240,7 +240,19 @@ changes and late async callbacks. The custom TUI view and RPC typecheck against
 the published V2 API. Node tests exercise the controller, not terminal rendering.
 `npm run test:ui` uses Bun 1.3.14+ and a headless OpenTUI renderer to verify
 hover/leave styling, real on/off and dismiss mouse clicks, right-click rejection
-and narrow-terminal layout. CI runs both suites with Node 26 and Bun 1.3.14.
+and narrow-terminal layout. It also overlaps a focused textarea with the controls,
+checks that the toast paints and receives clicks above it, verifies continued
+typing and editor restoration after dismiss, and keeps blocking dialogs above
+the toast. CI runs both suites with Node 26 and Bun 1.3.14.
+
+`npm run test:ui:ghost -- /path/to/opencode-ghost-text/src/ghost.tsx` is an optional
+cross-plugin integration check. It loads the supplied real ghost implementation
+with a shared OpenTUI runtime, overlaps its preview with `NotificationView`,
+checks that hidden suggestions cannot be accepted and verifies restoration after
+dismissal. Ghost-text v0.1.0's global postprocessor overwrites composed overlays
+regardless of notification z-index; the ghost plugin's native scene-preview fix
+is required. This check uses no model calls or live GitHub writes and is not in
+default CI because it requires the other checkout.
 
 The implementation follows the full V2 plugin, commands, plugin loading and
 config guides, plus the V2 OpenAPI admission contract:

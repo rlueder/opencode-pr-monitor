@@ -119,6 +119,9 @@ That command only shows the controls; it does not enable monitoring.
 - Review feedback is untrusted input. Existing tool permissions still matter.
   No separate code-review model, auto-merge, rebase or force-push is added.
 - These controls are for the full terminal UI, not desktop/web or OS toasts.
+- If you also use `opencode-ghost-text`, v0.1.0's postprocessor can paint over
+  overlays. Its scene-preview fix is needed; raising a notification's z-index
+  alone cannot prevent a plugin from drawing onto the finished frame.
 
 See [behavior and safety](docs/behavior.md) for eligibility, persistence,
 cancellation and other operational details.

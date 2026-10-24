@@ -143,6 +143,16 @@ test("UI status is read-only, session-scoped and reflects explicit controls", as
   assert.deepEqual(f.monitor.view("s1"), { enabled: false, url });
 });
 
+test("merged or closed PR is reported before a stale checkout mismatch", async () => {
+  for (const state of ["closed", "merged"] as const) {
+    const f = fixture();
+    f.snap.state = state;
+    f.snap.head = "old-head";
+    await assert.rejects(f.enable(), /PR is not open/);
+    assert.equal(f.persisted(), undefined);
+  }
+});
+
 test("strict PR parsing and persisted storage validation", () => {
   assert.equal(parsePR("https://github.com/Acme/Project/pull/42/").url, url);
   for (const bad of [

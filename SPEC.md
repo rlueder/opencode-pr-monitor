@@ -120,3 +120,26 @@ cells and colors to SVG/PNG with a reproducible development script. Label this
 as a headless component capture with sample state, not a live desktop screenshot
 or proof of monitoring. Do not capture unrelated desktop/chat data or change
 monitoring state. Inspect the image before referencing it in README.
+
+## Composer overlap regression
+
+Reproduce the screenshot with an actual focused textarea overlapping the toast's
+action row. Cover foreground text, opaque backgrounds and mouse hit-testing,
+not merely an isolated toast. Give notifications a layer above composer content
+and below blocking dialogs. Confirm typing still reaches the focused editor,
+toast clicks do not fall through, and hiding the toast reveals the intact editor.
+Keep native permission dialogs above the notification. Do not patch OpenCode
+or classify this as an upstream defect unless a minimal renderer test supports it.
+
+## Ghost-text coexistence
+
+The installed ghost-text v0.1.0 plugin fills its suggestion row in a global
+postprocessor, which overwrites all composed layers. A z-index-only textarea
+test cannot detect this. Add an optional integration test that compiles the
+actual ghost module supplied by the developer against the same OpenTUI runtime as
+NotificationView, mirroring OpenCode's shared plugin runtime. It must fail with
+the old painter and pass with the native scene-preview fix in the ghost plugin.
+Check first-frame composition, hidden-suggestion acceptance, dismissal and
+restored suggestions. Do not copy the ghost algorithm into a mock or disable
+the other plugin as a purported fix. Rejected activation of a closed/merged PR
+must report that terminal state before comparing checkout SHAs.
