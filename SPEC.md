@@ -108,3 +108,15 @@ existing notification to the front and refresh it. Streaming text blocks and
 replayed events for the same message/URL must not duplicate it. Multiple mentions
 in one message share one notification. Repeated mentions must not reset monitoring,
 consume repair attempts, or interrupt an in-flight UI action.
+
+## README and capture
+
+Make README a concise public quick start with relative screenshot links, generic
+installation paths, clickable controls, keyboard commands, permissions and key
+limitations. Preserve detailed operational contracts in docs/behavior.md.
+Capture the real NotificationView in an isolated OpenTUI renderer with a sample
+dark theme and public PR URL, including a hovered toggle. Export the captured
+cells and colors to SVG/PNG with a reproducible development script. Label this
+as a headless component capture with sample state, not a live desktop screenshot
+or proof of monitoring. Do not capture unrelated desktop/chat data or change
+monitoring state. Inspect the image before referencing it in README.
