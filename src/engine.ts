@@ -11,10 +11,18 @@ export class Monitor {
   private control: Promise<unknown> = Promise.resolve();
   private enabling: string | undefined;
   private commanding = false;
+  private optOuts = new Set<string>();
   constructor(private readonly ports: Ports) {}
 
   async init() {
     this.binding = await this.ports.load();
+    this.optOuts = new Set(await this.ports.loadOptOuts());
+    if (
+      this.binding &&
+      !this.binding.enabled &&
+      this.binding.reason.startsWith("Disabled explicitly")
+    )
+      this.optOuts.add(this.binding.session);
   }
   view(session: string) {
     const b = this.binding;
@@ -28,7 +36,16 @@ export class Monitor {
       return "PR monitor: off (no binding for this session).";
     return `PR monitor: ${b.enabled ? "on" : "off"}\n${b.pr.url}\n${b.reason}\nAdmitted wakeups: ${b.wakes} on head, ${b.total} total. Reserved attempts: ${b.attempts}/3 on head, ${b.totalAttempts}/12 total. Errors: ${b.errors}. Next poll: ${new Date(b.next).toISOString()}.`;
   }
+  nextDelay() {
+    return this.binding?.enabled &&
+      !this.closed &&
+      !this.commanding &&
+      !this.controller.signal.aborted
+      ? Math.max(0, Math.min(POLL, this.binding.next - this.ports.now()))
+      : POLL;
+  }
   command(session: string, text: string): Promise<string> {
+    if (text.trim() === "off") this.optOuts.add(session);
     // Abort immediately, before waiting for a concurrent sweep or enable.
     if (
       text.trim() === "off" &&
@@ -48,10 +65,50 @@ export class Monitor {
     this.control = result.catch(() => {});
     return result;
   }
-  private async execute(session: string, text: string) {
+  created(
+    session: string,
+    url: string,
+    started: number,
+    ended: number,
+  ): Promise<void> {
+    const result = this.control.then(async () => {
+      if (this.closed || this.optOuts.has(session)) return;
+      if (this.binding?.enabled) {
+        if (
+          this.binding.session !== session ||
+          this.binding.pr.url === parsePR(url).url
+        )
+          return;
+        await this.validSession(session, this.controller.signal);
+        const previous = await this.ports.head(
+          this.binding.pr,
+          this.controller.signal,
+        );
+        if (previous.state !== "closed" && previous.state !== "merged") return;
+      }
+      this.commanding = true;
+      this.enabling = session;
+      try {
+        await this.execute(session, `on ${url}`, { started, ended });
+      } finally {
+        this.commanding = false;
+        this.enabling = undefined;
+      }
+      await this.sweep();
+    });
+    this.control = result.catch(() => {});
+    return result;
+  }
+  private async execute(
+    session: string,
+    text: string,
+    creation?: { started: number; ended: number },
+  ) {
     if (this.closed) throw new Error("Plugin unloaded");
     if (text === "status" || !text) return this.status(session);
     if (text === "off") {
+      this.optOuts.add(session);
+      await this.ports.saveOptOuts([...this.optOuts]);
       if (this.binding?.session !== session) return this.status(session);
       this.controller.abort();
       await this.running;
@@ -74,6 +131,27 @@ export class Monitor {
     this.controller = new AbortController();
     const signal = this.controller.signal;
     await this.validSession(session, signal);
+    const validateCreation = (snap: Snapshot) => {
+      if (!creation) return;
+      if (
+        this.optOuts.has(session) ||
+        !snap.author ||
+        snap.author.toLowerCase() !== snap.viewer.toLowerCase() ||
+        !Number.isFinite(snap.created) ||
+        snap.created < Math.floor(creation.started / 1000) * 1000 ||
+        snap.created > creation.ended
+      )
+        throw new Error("Not a newly created session-owned PR");
+    };
+    if (creation) {
+      const [local, snap] = await Promise.all([
+        this.ports.local(signal),
+        this.ports.snapshot(pr, signal),
+      ]);
+      if (snap.state !== "open") throw new Error("PR is not open");
+      this.validate(local, snap, pr.repo);
+      validateCreation(snap);
+    }
     await this.ports.permission(session, pr.url, signal);
     if (signal.aborted || this.closed) throw new Error("Enable cancelled");
     const [local, snap] = await Promise.all([
@@ -84,6 +162,7 @@ export class Monitor {
     if (signal.aborted || this.closed) throw new Error("Enable cancelled");
     if (snap.state !== "open") throw new Error("PR is not open");
     this.validate(local, snap, pr.repo);
+    validateCreation(snap);
     this.binding = {
       version: 1,
       session,
@@ -92,9 +171,9 @@ export class Monitor {
       branch: local.branch,
       enabled: true,
       reason:
-        "Enabled explicitly. Existing comments baselined; no commit/push approval implied.",
+        "Enabled with permission. Catching up eligible feedback; no commit/push approval implied.",
       head: snap.head,
-      seen: snap.comments.map((c) => c.id),
+      seen: [],
       delivered: [],
       wakes: 0,
       total: 0,
@@ -106,6 +185,10 @@ export class Monitor {
       totalAttempts: 0,
     };
     await this.ports.save(this.binding);
+    if (!creation) {
+      this.optOuts.delete(session);
+      await this.ports.saveOptOuts([...this.optOuts]);
+    }
     return this.status(session);
   }
   sweep(): Promise<void> {

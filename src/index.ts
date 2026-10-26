@@ -1,9 +1,10 @@
 import { realpath } from "node:fs/promises";
 import { Plugin } from "@opencode/plugin";
-import { Monitor, POLL } from "./engine.ts";
+import { Monitor } from "./engine.ts";
 import { GitHub, readLocal, runner } from "./github.ts";
 import { decodeBinding } from "./types.ts";
 import { MonitorUI } from "./rpc.ts";
+import { watchCreations } from "./creation.ts";
 
 // The V2 runtime owns one active plugin/location. This extra guard also protects
 // accidental duplicate setup in the same module instance during reload.
@@ -17,11 +18,25 @@ export default Plugin.define({
     const run = runner(directory);
     const github = new GitHub(run);
     const key = `binding/v1/${encodeURIComponent(directory)}`;
+    const optOutKey = `auto-off/v1/${encodeURIComponent(directory)}`;
     const monitor = new Monitor({
       directory,
       now: Date.now,
       id: () => `msg_prmonitor_${crypto.randomUUID().replaceAll("-", "")}`,
       load: async () => decodeBinding(await ctx.storage.get(key)),
+      loadOptOuts: async () => {
+        const value = await ctx.storage.get(optOutKey);
+        if (value === undefined) return [];
+        if (
+          !Array.isArray(value) ||
+          !value.every((s): s is string => typeof s === "string")
+        )
+          throw new Error("Invalid monitor opt-out storage");
+        return value;
+      },
+      saveOptOuts: async (sessions) => {
+        await ctx.storage.set(optOutKey, sessions);
+      },
       save: async (b) => {
         await ctx.storage.set(key, b);
       },
@@ -80,6 +95,12 @@ export default Plugin.define({
       },
     });
     await monitor.init();
+    const stopCreations = await watchCreations(
+      ctx.tool,
+      directory,
+      (session, url, started, ended) =>
+        monitor.created(session, url, started, ended),
+    );
     const rpc = await ctx.rpc.register(MonitorUI, {
       status: async (input) => {
         if (
@@ -128,7 +149,7 @@ export default Plugin.define({
           .finally(() => {
             if (!closed) schedule();
           });
-      }, POLL);
+      }, monitor.nextDelay());
       timer.unref();
     };
     schedule();
@@ -136,6 +157,7 @@ export default Plugin.define({
       if (closed) return;
       closed = true;
       clearTimeout(timer);
+      await stopCreations();
       await monitor.close();
       await registration.dispose();
       await rpc.dispose();

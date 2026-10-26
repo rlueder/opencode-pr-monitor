@@ -23,6 +23,8 @@ function response(checks: unknown[] = []) {
       repository: {
         pullRequest: {
           state: "OPEN",
+          author: { login: "me" },
+          createdAt: "2026-10-25T22:15:00Z",
           headRefOid: "sha1",
           baseRefOid: "base1",
           headRefName: "fix",
@@ -111,7 +113,11 @@ test("comments, reviews, inline replies, Bot and deleted authors decoded", () =>
     { ...c, id: "draft", state: "PENDING" },
   ]);
   p.reviewThreads = connection([
-    { comments: connection([{ ...c, id: "inline", author: null }]) },
+    {
+      isResolved: false,
+      isOutdated: false,
+      comments: connection([{ ...c, id: "inline", author: null }]),
+    },
   ]);
   const s = decodeSnapshot(JSON.stringify(r));
   assert.deepEqual(
@@ -135,6 +141,44 @@ test("partial errors, overflow connections and malformed data rejected", () => {
   assert.throws(() => decodeSnapshot(JSON.stringify(r)), /Incomplete/);
   assert.throws(() => decodeSnapshot("{}"));
   assert.throws(() => decodeSnapshot("not json"));
+});
+
+test("activation evidence and unresolved thread filtering come from GitHub", () => {
+  const r = response();
+  const c = {
+    id: "c",
+    author: { login: "reviewer", __typename: "User" },
+    body: "fix",
+    authorAssociation: "MEMBER",
+    url: "url",
+  };
+  r.data.repository.pullRequest.reviewThreads = connection([
+    {
+      isResolved: true,
+      isOutdated: false,
+      comments: connection([{ ...c, id: "resolved" }]),
+    },
+    {
+      isResolved: false,
+      isOutdated: true,
+      comments: connection([{ ...c, id: "outdated" }]),
+    },
+    { isResolved: false, isOutdated: false, comments: connection([c]) },
+  ]);
+  r.data.repository.pullRequest.reviews = connection([
+    { ...c, id: "dismissed", state: "DISMISSED" },
+  ]);
+  const snap = decodeSnapshot(JSON.stringify(r));
+  assert.equal(snap.author, "me");
+  assert.equal(snap.created, Date.parse("2026-10-25T22:15:00Z"));
+  assert.deepEqual(
+    snap.comments.map((c) => c.id),
+    ["c"],
+  );
+  r.data.repository.pullRequest.reviewThreads = connection([
+    { comments: connection([c]) },
+  ]);
+  assert.throws(() => decodeSnapshot(JSON.stringify(r)), /thread state/);
 });
 
 test("remote identity rejects credentials, foreign hosts and URL suffixes", () => {

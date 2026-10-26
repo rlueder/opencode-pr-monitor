@@ -15,6 +15,7 @@ const url = "https://github.com/acme/project/pull/42";
 function fixture() {
   let now = 1_000_000;
   let persisted: Binding | undefined;
+  let optOuts: string[] = [];
   let calls = 0;
   let admits = 0;
   let denied = false;
@@ -34,6 +35,8 @@ function fixture() {
     operation: false,
   };
   const snap: Snapshot = {
+    author: "me",
+    created: now,
     state: "open",
     head: "sha1",
     base: "base1",
@@ -49,6 +52,10 @@ function fixture() {
     now: () => now,
     id: () => `msg_test_${++admits}`,
     load: async () => structuredClone(persisted),
+    loadOptOuts: async () => [...optOuts],
+    saveOptOuts: async (sessions) => {
+      optOuts = [...sessions];
+    },
     save: async (b) => {
       persisted = structuredClone(b);
     },
@@ -141,6 +148,36 @@ test("UI status is read-only, session-scoped and reflects explicit controls", as
   assert.equal(f.calls(), reads);
   await f.monitor.command("s1", "off");
   assert.deepEqual(f.monitor.view("s1"), { enabled: false, url });
+});
+
+test("an early timer tick rearms for the remaining deadline, not another full minute", async () => {
+  const f = fixture();
+  assert.equal(f.monitor.nextDelay(), POLL);
+  await f.monitor.created("s1", url, 1_000_000, 1_001_000);
+  assert.equal(f.monitor.nextDelay(), POLL);
+  f.advance(POLL / 2);
+  await f.monitor.sweep();
+  assert.equal(f.monitor.nextDelay(), POLL / 2);
+  const reads = f.calls();
+  f.advance(POLL / 2);
+  await f.monitor.sweep();
+  assert.equal(f.calls(), reads + 1);
+});
+
+test("an overdue binding does not spin the timer while permission is pending", async () => {
+  const f = fixture();
+  await f.enable();
+  let approve!: () => void;
+  f.ports.permission = async () =>
+    new Promise<void>((resolve) => {
+      approve = resolve;
+    });
+  const enabling = f.enable();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.monitor.nextDelay(), POLL);
+  approve();
+  await enabling;
+  assert.equal(f.monitor.nextDelay(), 0);
 });
 
 test("merged or closed PR is reported before a stale checkout mismatch", async () => {
@@ -328,7 +365,7 @@ test("uncertain conflict delivery invalidated by unknown mergeability", async ()
   assert.equal(f.persisted()?.pending, null);
 });
 
-test("baseline old comments; eligible feedback only; quote and truncate untrusted text", async () => {
+test("catch up old comments; eligible feedback only; quote and truncate untrusted text", async () => {
   const f = fixture();
   f.snap.comments = [comment("old")];
   await f.enable();
@@ -349,7 +386,7 @@ test("baseline old comments; eligible feedback only; quote and truncate untruste
   await f.monitor.sweep();
   assert.equal(f.deliveries.length, 1);
   const box = f.deliveries[0]!;
-  assert.deepEqual(box.comments, ["app", "owner", "collaborator"]);
+  assert.deepEqual(box.comments, ["old", "app", "owner", "collaborator"]);
   assert.ok(box.text.length < 6000);
   assert.ok(!box.text.includes("<ci-monitor-event>"));
   assert.match(box.text, /UNTRUSTED/);
@@ -594,4 +631,135 @@ test("dirty tree discovered during final conflict check blocks delivery", async 
   await f.monitor.sweep();
   assert.equal(f.deliveries.length, 0);
   assert.equal(f.persisted()?.pending, null);
+});
+
+test("new session-owned PR requests permission immediately and catches up pre-approval feedback", async () => {
+  const f = fixture();
+  let approve!: () => void;
+  f.ports.permission = async () =>
+    new Promise<void>((resolve) => {
+      approve = resolve;
+    });
+  const activation = f.monitor.created("s1", url, 1_000_000, 1_001_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof approve, "function");
+  assert.equal(f.persisted(), undefined);
+  f.snap.comments = [comment("review-before-approval")];
+  f.advance();
+  approve();
+  await activation;
+  assert.equal(f.monitor.view("s1").enabled, true);
+  assert.deepEqual(f.deliveries[0]?.comments, ["review-before-approval"]);
+  assert.equal(f.persisted()?.attempts, 1);
+  await f.monitor.created("s1", url, 1_000_000, 1_001_000);
+  assert.equal(f.persisted()?.attempts, 1);
+  f.advance();
+  await f.monitor.sweep();
+  assert.equal(f.deliveries.length, 1);
+});
+
+test("automatic activation rejects old, foreign, stale and invalid creation evidence before permission", async () => {
+  for (const change of [
+    (f: ReturnType<typeof fixture>) => {
+      f.snap.created = 999_000;
+    },
+    (f: ReturnType<typeof fixture>) => {
+      f.snap.created = 1_002_000;
+    },
+    (f: ReturnType<typeof fixture>) => {
+      f.snap.created = NaN;
+    },
+    (f: ReturnType<typeof fixture>) => {
+      f.snap.author = "someone-else";
+    },
+    (f: ReturnType<typeof fixture>) => {
+      f.local.head = "stale";
+    },
+    (f: ReturnType<typeof fixture>) => {
+      f.snap.headRepo = "fork/project";
+    },
+    (f: ReturnType<typeof fixture>) => {
+      f.move();
+    },
+  ]) {
+    const f = fixture();
+    change(f);
+    f.ports.permission = async () => {
+      assert.fail("Must validate ownership before permission");
+    };
+    await assert.rejects(f.monitor.created("s1", url, 1_000_000, 1_001_000));
+    assert.equal(f.persisted(), undefined);
+  }
+});
+
+test("automatic activation preserves denial and revalidates after permission", async () => {
+  const denied = fixture();
+  denied.deny();
+  await assert.rejects(
+    denied.monitor.created("s1", url, 1_000_000, 1_001_000),
+    /Denied/,
+  );
+  assert.equal(denied.persisted(), undefined);
+  const moved = fixture();
+  moved.ports.permission = async () => {
+    moved.move();
+  };
+  await assert.rejects(
+    moved.monitor.created("s1", url, 1_000_000, 1_001_000),
+    /Session moved/,
+  );
+});
+
+test("explicit off without a binding survives reload and only explicit on clears it", async () => {
+  const f = fixture();
+  await f.monitor.command("s1", "off");
+  await f.monitor.close();
+  const restarted = new Monitor(f.ports);
+  await restarted.init();
+  await restarted.created("s1", url, 1_000_000, 1_001_000);
+  assert.equal(f.calls(), 0);
+  await restarted.command("s1", `on ${url}`);
+  assert.equal(restarted.view("s1").enabled, true);
+});
+
+test("off and unload prevent late automatic activation approval", async () => {
+  for (const action of ["off", "close"] as const) {
+    const f = fixture();
+    let approve!: () => void;
+    f.ports.permission = async () =>
+      new Promise<void>((resolve) => {
+        approve = resolve;
+      });
+    const activation = f.monitor.created("s1", url, 1_000_000, 1_001_000);
+    await new Promise((resolve) => setImmediate(resolve));
+    const stopping =
+      action === "off" ? f.monitor.command("s1", "off") : f.monitor.close();
+    approve();
+    await assert.rejects(activation, /cancelled/);
+    await stopping;
+    assert.equal(f.persisted(), undefined);
+    assert.equal(f.deliveries.length, 0);
+  }
+});
+
+test("automatic activation never replaces another session or an open PR", async () => {
+  const f = fixture();
+  await f.enable();
+  const calls = f.calls();
+  await f.monitor.created("s2", url, 1_000_000, 1_001_000);
+  await f.monitor.created("s1", url.replace("42", "43"), 1_000_000, 1_001_000);
+  assert.equal(f.calls(), calls);
+  assert.equal(f.persisted()?.pr.url, url);
+});
+
+test("new PR replaces the same session's merged PR without waiting for the timer", async () => {
+  const f = fixture();
+  await f.enable();
+  f.ports.head = async (pr) => ({
+    head: f.snap.head,
+    state: pr.number === 42 ? "merged" : "open",
+  });
+  const next = url.replace("42", "43");
+  await f.monitor.created("s1", next, 1_000_000, 1_001_000);
+  assert.deepEqual(f.monitor.view("s1"), { enabled: true, url: next });
 });

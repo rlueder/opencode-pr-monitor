@@ -4,8 +4,8 @@ Keep a pull request moving without repeatedly asking your coding session to chec
 GitHub. This OpenCode V2 plugin watches CI failures, merge conflicts and new review
 feedback, then queues a bounded repair request in the session that owns the PR.
 
-Mention a PR URL in chat to show its controls. Monitoring stays **off until you
-explicitly enable it**.
+After a supported `gh pr create` call, the server immediately requests monitoring
+permission for that session's new PR. Ordinary PR mentions only show controls.
 
 ![PR toast showing monitoring enabled, a hovered Turn off button, Refresh and Dismiss](docs/images/pr-toast.png)
 
@@ -18,6 +18,8 @@ and a dark theme. The Turn off button is hovered. This is not a desktop capture.
   hover, pressed and disabled states.
 - **Session-bound monitoring:** checks the PR every 60 seconds while the server
   and project location remain loaded.
+- **Creation activation:** verifies the new PR's author, creation time and exact
+  checkout, asks normal permission, then checks immediately without a toast click.
 - **Background repair requests:** queues new failures, conflicts and eligible
   review feedback without interrupting an active turn.
 - **Bounded activity:** persistent deduplication, backoff and repair budgets keep
@@ -81,6 +83,12 @@ not published to npm.
 
 ## Use it
 
+Create the PR with a direct `gh pr create` shell call in the owning session.
+Use `--body-file` for generated descriptions instead of shell substitutions.
+Approve `pr-monitor.enable` if prompted. Feedback arriving before approval is
+included in the first sweep, not marked as already handled. Resolved/outdated
+inline threads and dismissed reviews are excluded.
+
 Mention a GitHub PR URL in a user, assistant or status message. Click **Turn on**
 and approve the normal OpenCode permission request if prompted. The notification
 reads actual server status before showing **Turn off**. **Dismiss** only hides
@@ -113,7 +121,12 @@ That command only shows the controls; it does not enable monitoring.
 - Monitoring stops on a merged/closed PR or an invalid session. The host and
   project location must stay loaded; this is not a durable cloud scheduler.
 - Three repair attempts per head, twelve per binding, with a five-minute cooldown.
-  Re-enabling explicitly resets the budgets and comment baseline.
+  Re-enabling explicitly resets budgets and catches up existing eligible feedback.
+- **Turn off** persists an opt-out for the session, including future PRs. Only
+  explicit **Turn on** clears it. Creation never takes over another session's PR.
+- Automatic creation detection supports a single literal `gh pr create` command,
+  not wrappers, shell expansions, pipelines, MCP calls or external creation. Those
+  still use **Turn on**. Chat/history replay never activates monitoring.
 - API snapshots fail closed if a connection exceeds 100 entries. Large PRs may
   need pagination support that is not implemented yet.
 - Review feedback is untrusted input. Existing tool permissions still matter.
