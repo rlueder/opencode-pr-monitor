@@ -16,6 +16,8 @@ export type Comment = {
   url: string;
 };
 export type Snapshot = {
+  author: string;
+  created: number;
   state: string;
   head: string;
   base: string;
@@ -58,6 +60,8 @@ export interface Ports {
   now(): number;
   id(): string;
   load(): Promise<Binding | undefined>;
+  loadOptOuts(): Promise<string[]>;
+  saveOptOuts(sessions: string[]): Promise<void>;
   save(binding: Binding): Promise<void>;
   session(
     id: string,

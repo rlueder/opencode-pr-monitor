@@ -6,7 +6,7 @@ user configuration, shared services, or live GitHub resources.
 ## Control and authorization
 
 Register `/pr-monitor on https://github.com/OWNER/REPO/pull/NUMBER`, `off`, and
-`status` through `ctx.command.transform`. No enable tool, creation hook, inherited
+`status` through `ctx.command.transform`. No enable tool, inherited
 binding, or inference from comments. Before enable, assert the stable action
 `pr-monitor.enable` against the canonical PR URL, using ordinary session rules.
 Command invocation is explicit intent, not an authentication boundary: API clients
@@ -20,7 +20,7 @@ directory, Git worktree root, origin repository, local branch, local HEAD, PR
 head repository and SHA. Reject forks for this MVP rather than guess remote
 ownership. Use authenticated `gh` via argv, never a shell. Only read operations.
 GitHub.com only. Fail closed on partial/oversized API results. Read comments
-with explicit connection overflow detection, record all existing IDs at enable, then deliver eligible new
+with explicit connection overflow detection, catch up existing eligible feedback at enable, then deliver eligible new
 review/issue comments and reviews. Eligible: OWNER/MEMBER/COLLABORATOR or Bot;
 exclude authenticated user. Read check runs and legacy commit statuses for the
 exact head. Only terminal failures count. Unknown mergeability is not conflict.
@@ -143,3 +143,31 @@ Check first-frame composition, hidden-suggestion acceptance, dismissal and
 restored suggestions. Do not copy the ghost algorithm into a mock or disable
 the other plugin as a purported fix. Rejected activation of a closed/merged PR
 must report that terminal state before comparing checkout SHAs.
+
+## Immediate creation activation
+
+Use live `tool.execute.before/after` hooks, never history or chat mentions. Recognize
+only a direct, single `gh pr create` shell invocation with literal arguments and
+no shell expansions or control operators. Require a completed result containing
+exactly one standalone PR URL, verify GitHub author equals authenticated viewer,
+and verify creation time is within the live call window. Keep all exact session,
+repository, branch and head checks. Unsupported wrappers, pipelines, MCP creation
+and external creation retain manual controls rather than infer ownership.
+
+Start the ordinary `pr-monitor.enable` permission assertion immediately after
+verification, independently of TUI clicks and session inbox delivery. Do not block
+tool completion awaiting user permission. Revalidate after permission, persist the
+binding, then sweep immediately. Catch up eligible existing feedback, excluding
+resolved/outdated review threads and dismissed reviews. Never baseline unresolved
+feedback during activation. Preserve queue delivery, untrusted quoting, budgets
+and durable deduplication; repeated creation observations must not reset bindings.
+
+Persist explicit `off` by session/location even before a binding exists. Automatic
+activation cannot override it or another session's binding. Only explicit `on`
+clears that session's opt-out. Off/unload cancels pending local activation, including
+late approvals. Unit-test creation recognition, hook wiring, permission delay/race,
+opt-out persistence, catch-up and ownership checks without live monitor mutations.
+
+When a timer fires before a binding's next deadline, rearm for the remaining
+delay rather than a full polling interval. Resume an overdue persisted binding
+without an extra minute of startup delay. Keep sweeps nonoverlapping.

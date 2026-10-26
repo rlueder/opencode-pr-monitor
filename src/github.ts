@@ -149,7 +149,7 @@ export const HEAD_QUERY =
 export const QUERY = `query Monitor($owner:String!,$repo:String!,$number:Int!) {
   viewer { login }
   repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
-    state headRefOid baseRefOid headRefName headRepository { nameWithOwner } mergeable
+    state createdAt author { login } headRefOid baseRefOid headRefName headRepository { nameWithOwner } mergeable
     commits(last:1) { nodes { commit { statusCheckRollup { contexts(first:100) {
       ${page} nodes {
         ... on CheckRun { id name status conclusion completedAt detailsUrl }
@@ -158,7 +158,7 @@ export const QUERY = `query Monitor($owner:String!,$repo:String!,$number:Int!) {
     } } } } }
     comments(first:100) { ${page} nodes { ${author} } }
     reviews(first:100) { ${page} nodes { ${author} state } }
-    reviewThreads(first:100) { ${page} nodes { comments(first:100) { ${page} nodes { ${author} } } } }
+    reviewThreads(first:100) { ${page} nodes { isResolved isOutdated comments(first:100) { ${page} nodes { ${author} } } } }
   } }
 }`;
 
@@ -195,6 +195,8 @@ export function decodeSnapshot(raw: string): Snapshot {
   if (pr.state === "CLOSED" || pr.state === "MERGED")
     return {
       state: str(pr.state).toLowerCase(),
+      author: "",
+      created: 0,
       head: "",
       base: "",
       branch: "",
@@ -208,10 +210,23 @@ export function decodeSnapshot(raw: string): Snapshot {
   if (!commit) throw new Error("Missing PR head commit");
   const rollup = object(commit.commit).statusCheckRollup;
   const checks = rollup === null ? [] : nodes(object(rollup).contexts);
+  const created = Date.parse(str(pr.createdAt));
+  if (!Number.isFinite(created))
+    throw new Error("Invalid GitHub creation time");
   const comments = [
     ...nodes(pr.comments),
-    ...nodes(pr.reviews).filter((c) => c.state !== "PENDING"),
-    ...nodes(pr.reviewThreads).flatMap((thread) => nodes(thread.comments)),
+    ...nodes(pr.reviews).filter(
+      (c) => !["PENDING", "DISMISSED"].includes(String(c.state)),
+    ),
+    ...nodes(pr.reviewThreads).flatMap((thread) => {
+      if (
+        typeof thread.isResolved !== "boolean" ||
+        typeof thread.isOutdated !== "boolean"
+      )
+        throw new Error("Incomplete GitHub thread state");
+      const comments = nodes(thread.comments);
+      return thread.isResolved || thread.isOutdated ? [] : comments;
+    }),
   ].map((c): Comment => {
     const a =
       c.author === null
@@ -228,6 +243,8 @@ export function decodeSnapshot(raw: string): Snapshot {
   });
   return {
     state: str(pr.state).toLowerCase(),
+    author: pr.author === null ? "" : str(object(pr.author).login),
+    created,
     head: str(pr.headRefOid),
     base: str(pr.baseRefOid),
     branch: str(pr.headRefName),

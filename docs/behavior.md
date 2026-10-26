@@ -2,7 +2,7 @@
 
 See the [README](../README.md) for the quick start and toast capture.
 
-An opt-in **OpenCode V2 plugin** that watches an open pull request and
+A permission-backed **OpenCode V2 plugin** that watches an open pull request and
 queues repair requests in the session that enabled it. It detects terminal CI
 failures, merge conflicts, and new eligible reviewer feedback. The existing
 session investigates and fixes problems under its normal instructions and
@@ -10,7 +10,7 @@ permissions. The plugin itself only reads Git and GitHub.
 
 Its companion terminal UI plugin shows a toast when a chat message mentions a
 GitHub PR URL in chat, including after creating a PR. It offers the command to
-enable monitoring without enabling it automatically.
+enable monitoring. Mere mentions never enable it automatically.
 
 ## Local installation
 
@@ -114,17 +114,45 @@ From the session that owns the checked-out PR branch:
 
 `on` validates the session location, worktree root, origin repository, local
 branch and exact HEAD against the PR. It asserts `pr-monitor.enable` on the
-canonical PR URL, using the session's normal permission rules. It baselines
-existing comments, so enabling does not replay historical feedback. It never
-automatically binds a PR created by a tool or inherited from another session.
+canonical PR URL, using the session's normal permission rules. It catches up
+existing eligible feedback rather than baselining it. Resolved/outdated inline
+threads and dismissed reviews are excluded. It never inherits another session's PR.
 Only one session may own an active binding at a location. Another session must
-not silently take it over. Repeating `on` explicitly resets the baseline and
+not silently take it over. Repeating `on` explicitly resets comment deduplication and
 budgets, including for an already monitored PR.
 
-Command execution itself is the explicit control surface. Like other OpenCode
+Manual command execution is an explicit control surface. Like other OpenCode
 commands, trusted API clients can invoke it too; it is not proof that a human
 typed a keystroke. There is no model-callable enable tool or feedback-driven
 enable path. Do not expose an unrestricted OpenCode API to untrusted clients.
+
+### Activation after creation
+
+The server's live tool before/after hooks recognize a direct, single literal
+`gh pr create` shell invocation. A completed result must contain exactly one
+standalone canonical PR URL. Before asking permission, GitHub must confirm the
+authenticated viewer authored it within the observed tool call's time window
+(GitHub timestamps have second precision). The exact session, location, repository,
+branch and HEAD must match. Permission is requested immediately, without waiting
+for assistant prose, a TUI click or queued status-message delivery. The hook does
+not block tool completion while the user decides. After approval, checks repeat,
+the binding is saved and the first sweep runs immediately. Feedback already present
+is eligible, including feedback that arrived during the permission prompt.
+
+Repeated observations cannot reset a monitored PR's budgets. A new PR may replace
+the same session's previous binding only after GitHub confirms the previous PR
+closed or merged. Another session's active binding is never replaced. Explicit
+`off` persists a session/location opt-out even without a binding; automatic
+creation activation cannot clear it. Only successful explicit `on` clears it.
+
+This conservative recognizer does not parse arbitrary shell programs. Wrappers,
+`cd && gh ...`, expansions such as `$(cat ...)`, pipelines, MCP creation and PRs
+created outside the session require manual `on`. History and chat mentions are
+not creation evidence. Clock skew, unavailable reads or mismatches fail closed;
+manual `on` remains available. No live automatic-activation repair has been
+verified. Existing stored comment IDs from older baselining versions are preserved
+to avoid duplicating acknowledged deliveries; explicit `on` resets them if catch-up
+is wanted. This implementation never changes a live binding on upgrade.
 
 **Opt-in does not approve commits or pushes.** A project requiring explicit
 approval for those actions continues to require it. The repair session may stop
@@ -132,13 +160,14 @@ and ask. The plugin neither installs allow rules nor overrides permissions.
 It never merges, rebases, force-pushes, auto-merges, or archives anything.
 
 `status` inserts a synthetic status message with `resume: false`, without a model
-call. `off` aborts ongoing reads promptly and persists the disabled binding.
+call. `off` aborts ongoing reads promptly and persists the disabled binding and opt-out.
 An already admitted queued request cannot be retracted by this plugin; review
 the session inbox before allowing it to run if necessary.
 
 ## Operation and safety
 
 - One nonoverlapping sweep per minute while the server and location are loaded.
+  Early timer ticks rearm for the remaining deadline, not another full minute.
   One GraphQL snapshot per sweep; a second, small head/state read occurs only
   before delivery. No check logs are fetched. Read failures back off from two
   minutes to one hour and never wake the model by themselves.
@@ -159,7 +188,7 @@ the session inbox before allowing it to run if necessary.
   worktree and no merge/rebase/cherry-pick or other detected Git operation.
   Conflict keys include both head and base SHA. Repair instructions require
   merging the current base, never rebasing or force-pushing.
-- New issue comments, submitted PR reviews and inline review replies are
+- Existing and new issue comments, submitted PR reviews and unresolved, non-outdated inline review replies are
   eligible only from OWNER/MEMBER/COLLABORATOR or a GitHub `Bot` actor. The current
   authenticated viewer's own feedback is excluded. Bot eligibility follows the
   API actor type; it is not a claim that every bot is trustworthy.
@@ -198,14 +227,14 @@ the session inbox before allowing it to run if necessary.
   per body. Remaining events wait for another budgeted wakeup. Comment edits and
   review-thread resolution changes are not separate events. Failure transitions
   are observed by polling, so brief intermediate states may be missed.
-- Native slash commands and explicit TUI actions control monitoring. Detection
-  only notifies about chat-mentioned PR URLs. No desktop checkbox, separate review
-  model, auto-merge, archive, live log streaming, or automatic PR binding.
+- Native slash commands, explicit TUI actions and verified live PR creation control
+  monitoring through ordinary permission rules. Chat detection only notifies.
+  No desktop checkbox, separate review model, auto-merge, archive or live logs.
 - The host/service **must remain running and the location loaded**. Default
   OpenCode location idling may unload the plugin. If desired, the user can set
   `"experimental": { "location_idle_timeout": false }` in the relevant project
   config, after considering the resource cost. A timer is not a durable scheduler.
-  After the location loads again, persisted bindings resume on the next tick.
+  After the location loads again, overdue persisted bindings resume immediately.
 - V2 2.1.4's `permission.assert` has **no cancellation argument**. Disable/unload
   stops awaiting it locally and a late approval cannot activate monitoring.
   The host-owned permission prompt may remain until dismissed; no unsupported
@@ -266,4 +295,4 @@ config guides, plus the V2 OpenAPI admission contract:
 
 [`SPEC.md`](../SPEC.md) records the implementation contract. The npm package is
 unpublished; the source repository is public. Installation and monitoring remain
-explicit choices.
+permission-backed choices.
