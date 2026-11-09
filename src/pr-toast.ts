@@ -1,6 +1,7 @@
 import type { SessionTextEnded, SessionInboxEnqueued } from "@opencode/client";
 import type { ToastOptions } from "@opencode/plugin/tui/context";
 import type { Plugin } from "@opencode/plugin/tui";
+import { STATUS_SOURCE } from "./rpc.ts";
 import { parsePR } from "./types.ts";
 
 export const TOAST_HISTORY_LIMIT = 2_000;
@@ -88,6 +89,16 @@ export function notifyPRMentions(
   } else {
     const item = event.data.item;
     if (item.type !== "user" && item.type !== "synthetic") return;
+    // The reply to an on/off toggle names the PR, but it is the result of an
+    // action the user just took, not a new mention. Reopening the notice here
+    // would undo the dismissal that follows a toggle.
+    const metadata =
+      item.type === "synthetic" ? item.payload.metadata : undefined;
+    if (
+      metadata?.source === STATUS_SOURCE &&
+      (metadata.action === "on" || metadata.action === "off")
+    )
+      return;
     text = item.payload.text;
     messageID = event.data.inboxID;
   }

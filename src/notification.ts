@@ -86,6 +86,7 @@ export class Notifications {
     notice.busy = true;
     notice.error = null;
     this.emit();
+    let toggled = false;
     try {
       const signal = this.controller.signal;
       notice.status = await this.ports.status(notice, signal);
@@ -107,6 +108,7 @@ export class Notifications {
           throw new Error(
             "Monitoring changed before confirmation. Refresh its status.",
           );
+        toggled = true;
       }
     } catch (error) {
       // SDK errors may contain structured diagnostics; do not render raw JSON.
@@ -116,6 +118,9 @@ export class Notifications {
           : "PR monitor request failed. Try Refresh.";
     } finally {
       notice.busy = false;
+      // A confirmed Turn on/off is the user's answer to the notice, so it
+      // closes. Failures stay visible with their error.
+      if (toggled) this.notices = this.notices.filter((n) => n !== notice);
       this.emit();
     }
   }

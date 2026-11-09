@@ -12,6 +12,7 @@ import {
   setupToasts,
   type MentionEvent,
 } from "../src/pr-toast.ts";
+import { STATUS_SOURCE, statusAction } from "../src/rpc.ts";
 
 const url = "https://github.com/owner/repo/pull/42";
 
@@ -228,6 +229,31 @@ test("a pasted user PR link and a synthetic status message each notify once", ()
     notifyPRMentions(e, boundary);
   assert.equal(toasts.length, 2);
   assert.equal(toasts[0]?.sessionID, "ses_one");
+});
+
+test("the server's reply to an on/off toggle does not reopen the notice; status replies still notify", () => {
+  const { boundary, toasts } = harness();
+  for (const action of ["on", "off", "status"] as const) {
+    const e = inbox(`PR monitor: ${action}\n${url}`, "synthetic");
+    e.data.inboxID = `msg_${action}`;
+    if (e.data.item.type === "synthetic")
+      e.data.item.payload.metadata = { source: STATUS_SOURCE, action };
+    notifyPRMentions(e, boundary);
+  }
+  assert.equal(toasts.length, 1);
+  // A user message with the same metadata shape is still an ordinary mention.
+  const user = inbox(url);
+  if (user.data.item.type === "user")
+    user.data.item.payload.metadata = { source: STATUS_SOURCE, action: "on" };
+  notifyPRMentions(user, boundary);
+  assert.equal(toasts.length, 2);
+});
+
+test("status reply metadata names the action the server ran", () => {
+  assert.equal(statusAction(` on ${url} `), "on");
+  assert.equal(statusAction("off"), "off");
+  assert.equal(statusAction("status"), "status");
+  assert.equal(statusAction(""), "status");
 });
 
 test("inbox compaction and move controls do not trigger notifications", () => {

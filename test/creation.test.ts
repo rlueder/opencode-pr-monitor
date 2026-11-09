@@ -14,7 +14,7 @@ test("only direct literal PR creation commands qualify, not mentions or shell wr
     'gh pr create --title "A fix" --body "literal \\$HOME"',
   ])
     assert.equal(
-      directCreate("shell", { command, workdir: "/work" }, "/work"),
+      directCreate("shell", { command, workdir: "/work" }),
       true,
       command,
     );
@@ -33,19 +33,26 @@ test("only direct literal PR creation commands qualify, not mentions or shell wr
     "gh pr create --body 'unterminated",
     "gh pr create \\",
   ])
-    assert.equal(directCreate("shell", { command }, "/work"), false, command);
-  assert.equal(
-    directCreate("webfetch", { command: "gh pr create" }, "/work"),
-    false,
-  );
-  assert.equal(
-    directCreate(
-      "shell",
-      { command: "gh pr create", workdir: "/elsewhere" },
-      "/work",
-    ),
-    false,
-  );
+    assert.equal(directCreate("shell", { command }), false, command);
+  assert.equal(directCreate("webfetch", { command: "gh pr create" }), false);
+  for (const input of [
+    { command: "gh pr create", workdir: 42 },
+    { command: "gh pr create", cwd: null },
+  ])
+    assert.equal(directCreate("shell", input), false);
+});
+
+test("creation from another worktree of the repository is recognized", () => {
+  // The session may run in one worktree while the PR branch lives in another.
+  // Repository ownership is checked later against the session's origin.
+  for (const input of [
+    {
+      command: "gh pr create --fill",
+      workdir: "/repo-fix-dexa-vat-apoe-review",
+    },
+    { command: "gh pr create --fill", cwd: "/repo-other-worktree" },
+  ])
+    assert.equal(directCreate("shell", input), true);
 });
 
 test("creation result requires a single standalone exact PR URL", () => {
@@ -76,7 +83,6 @@ test("creation observer registers live tool hooks and disposes both", async () =
         };
       },
     },
-    "/work",
     async () => {
       assert.fail("No live tool call");
     },
@@ -91,7 +97,6 @@ test("live before/after pairs are session-isolated, nonblocking and consumed onc
   let now = 1000;
   let release!: () => void;
   const calls = new CreationCalls(
-    "/work",
     async (...args) => {
       observed.push(args);
       await new Promise<void>((resolve) => {

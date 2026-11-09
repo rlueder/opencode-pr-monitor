@@ -18,8 +18,11 @@ and a dark theme. The Turn off button is hovered. This is not a desktop capture.
   hover, pressed and disabled states.
 - **Session-bound monitoring:** checks the PR every 60 seconds while the server
   and project location remain loaded.
-- **Creation activation:** verifies the new PR's author, creation time and exact
-  checkout, asks normal permission, then checks immediately without a toast click.
+- **Creation activation:** verifies the new PR's author, creation time and
+  repository, asks normal permission, then checks immediately without a toast click.
+- **Worktree aware:** the session can run in any worktree of the repository. The
+  plugin finds the worktree that has the PR branch checked out and tells the
+  session to work there.
 - **Background repair requests:** queues new failures, conflicts and eligible
   review feedback without interrupting an active turn.
 - **Bounded activity:** persistent deduplication, backoff and repair budgets keep
@@ -59,11 +62,17 @@ Preserve existing settings and replace the installation path and repository name
     {
       "action": "pr-monitor.enable",
       "resource": "https://github.com/owner/repo/pull/*",
-      "effect": "ask",
+      "effect": "allow",
     },
   ],
 }
 ```
+
+`allow` lets **Turn on** and creation activation start monitoring without a
+confirmation prompt. Use `ask` instead to confirm each PR. The plugin's own Git and
+GitHub reads run as plain read-only subprocesses, not session tools, so they never
+prompt. The rule covers only monitoring: repairs still run under the session's
+ordinary rules for shell commands, commits and pushes.
 
 The package includes a `./tui` companion. To explicitly load it in the terminal,
 including when connected to a remote server, add the local package path to
@@ -83,16 +92,17 @@ not published to npm.
 
 ## Use it
 
-Create the PR with a direct `gh pr create` shell call in the owning session.
-Use `--body-file` for generated descriptions instead of shell substitutions.
-Approve `pr-monitor.enable` if prompted. Feedback arriving before approval is
+Create the PR with a direct `gh pr create` shell call in the owning session, from
+any worktree of the repository. Use `--body-file` for generated descriptions
+instead of shell substitutions. Approve `pr-monitor.enable` if your rule asks. Feedback arriving before approval is
 included in the first sweep, not marked as already handled. Resolved/outdated
 inline threads and dismissed reviews are excluded.
 
 Mention a GitHub PR URL in a user, assistant or status message. Click **Turn on**
-and approve the normal OpenCode permission request if prompted. The notification
-reads actual server status before showing **Turn off**. **Dismiss** only hides
-the notice; it does not stop monitoring.
+(approve the OpenCode permission request if your rule asks). The notification
+reads actual server status before showing **Turn off**. Once the server confirms
+**Turn on** or **Turn off**, the notification closes; a failed action stays open
+with its error. **Dismiss** only hides the notice; it does not stop monitoring.
 
 A new message mentioning the same PR brings the notification back. Streaming
 updates and replay of the same message do not duplicate it.
@@ -116,8 +126,12 @@ That command only shows the controls; it does not enable monitoring.
 
 ## Limits and safety
 
-- GitHub.com only, same-repository PRs, the `origin` remote and an exact checkout
-  of the PR branch/head. Fork PRs and GitHub Enterprise are not supported.
+- GitHub.com only, same-repository PRs of the session checkout's `origin`. Fork
+  PRs and GitHub Enterprise are not supported.
+- The PR checkout is looked up in `git worktree list` of the session's repository:
+  the worktree with the PR branch, or one detached at the PR head. Repair requests
+  name that directory. If no worktree has the branch, CI and review events are
+  still delivered with a note saying so; conflicts wait for a clean checkout.
 - Monitoring stops on a merged/closed PR or an invalid session. The host and
   project location must stay loaded; this is not a durable cloud scheduler.
 - Three repair attempts per head, twelve per binding, with a five-minute cooldown.

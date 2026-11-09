@@ -198,14 +198,19 @@ try {
   setNotices((items) => items.map((item) => ({ ...item, busy: false })));
   await view.waitForFrame((value) => value.includes("Monitoring is off"));
   await click("[Turn on]");
+  // A confirmed toggle closes the notice; Dismiss is not needed.
+  await view.waitForFrame((frame) => !frame.includes("Pull request mentioned"));
+  assert.deepEqual(actions, [true]);
+  mention("message_on");
   await view.waitForFrame(
     (frame) =>
       frame.includes("Monitoring is on") && frame.includes("[Turn off]"),
   );
-  assert.deepEqual(actions, [true]);
   await click("[Turn off]");
-  await view.waitForFrame((frame) => frame.includes("Monitoring is off"));
+  await view.waitForFrame((frame) => !frame.includes("Pull request mentioned"));
   assert.deepEqual(actions, [true, false]);
+  mention("message_off");
+  await view.waitForFrame((frame) => frame.includes("Monitoring is off"));
   assert.ok(composer?.focused, "Toast controls do not steal editor focus");
   composer.cursorOffset = composer.plainText.length;
   await view.mockInput.typeText(" TYPED");
@@ -227,7 +232,7 @@ try {
   await view.waitForFrame((frame) => !frame.includes("Pull request mentioned"));
   view.resize(100, 32);
   await view.waitForFrame((frame) => frame.includes(`${editorText} TYPED`));
-  mention("message_one");
+  mention("message_off");
   await view.flush();
   assert.ok(
     !view.captureCharFrame().includes("Pull request mentioned"),
@@ -244,7 +249,7 @@ try {
     "New mention only reopens the controls",
   );
   console.log(
-    "Headless TUI smoke: composer/dialog layering, hit-testing, typing, hover/leave, on/off clicks, disabled/right-click guards, resize, dismiss, replay suppression and reopening passed.",
+    "Headless TUI smoke: composer/dialog layering, hit-testing, typing, hover/leave, on/off clicks that close the notice, disabled/right-click guards, resize, dismiss, replay suppression and reopening passed.",
   );
 } finally {
   notifications.close();

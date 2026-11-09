@@ -1,11 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Monitor, COOLDOWN, POLL } from "../src/engine.ts";
+import { Monitor, COOLDOWN, POLL, checkoutNote } from "../src/engine.ts";
 import { decodeBinding, parsePR } from "../src/types.ts";
 import type {
   Binding,
   Comment,
-  Local,
   Outbox,
   Ports,
   Snapshot,
@@ -26,14 +25,18 @@ function fixture() {
   let beforeRead: (() => Promise<void>) | undefined;
   let freshHead = "";
   const deliveries: Outbox[] = [];
-  const local: Local = {
-    root: "/work",
+  // One worktree of the session's repository. `present: false` means no
+  // worktree has the PR branch (or its head, when detached) checked out.
+  const local = {
     repo: "acme/project",
-    branch: "fix",
+    root: "/work",
+    branch: "fix" as string | null,
     head: "sha1",
     dirty: false,
     operation: false,
+    present: true,
   };
+  const targets: { branch: string; head: string }[] = [];
   const snap: Snapshot = {
     author: "me",
     created: now,
@@ -63,7 +66,25 @@ function fixture() {
     permission: async () => {
       if (denied) throw new Error("Denied");
     },
-    local: async () => structuredClone(local),
+    local: async (target) => {
+      targets.push({ ...target });
+      const match =
+        local.present &&
+        (local.branch === target.branch ||
+          (local.branch === null && local.head === target.head));
+      return {
+        repo: local.repo,
+        checkout: match
+          ? {
+              root: local.root,
+              branch: local.branch,
+              head: local.head,
+              dirty: local.dirty,
+              operation: local.operation,
+            }
+          : null,
+      };
+    },
     snapshot: async (_pr, signal) => {
       calls++;
       await beforeRead?.();
@@ -84,6 +105,7 @@ function fixture() {
     local,
     snap,
     deliveries,
+    targets,
     advance: (ms = COOLDOWN) => {
       now += ms;
     },
@@ -396,20 +418,11 @@ test("catch up old comments; eligible feedback only; quote and truncate untruste
   assert.equal(f.deliveries.length, 1);
 });
 
-test("foreign session/repo/root/branch/head/fork all fail closed", async () => {
+test("foreign session, foreign repository and fork PRs fail closed", async () => {
   for (const change of [
     (f: ReturnType<typeof fixture>) => f.move(),
     (f: ReturnType<typeof fixture>) => {
       f.local.repo = "someone/else";
-    },
-    (f: ReturnType<typeof fixture>) => {
-      f.local.root = "/other";
-    },
-    (f: ReturnType<typeof fixture>) => {
-      f.local.branch = "main";
-    },
-    (f: ReturnType<typeof fixture>) => {
-      f.local.head = "wrong";
     },
     (f: ReturnType<typeof fixture>) => {
       f.snap.headRepo = "fork/project";
@@ -422,21 +435,144 @@ test("foreign session/repo/root/branch/head/fork all fail closed", async () => {
   }
 });
 
-test("branch switch and new remote push wait for exact checkout", async () => {
+test("enable works when the session directory is a different worktree than the PR checkout", async () => {
+  const f = fixture();
+  // Session runs in /work on another branch; the PR branch lives elsewhere.
+  f.local.root = "/repo-fix-dexa-vat-apoe-review";
+  assert.match(await f.enable(), /PR monitor: on/);
+  assert.deepEqual(f.targets.at(-1), { branch: "fix", head: "sha1" });
+  assert.equal(f.persisted()?.checkout, "/repo-fix-dexa-vat-apoe-review");
+  assert.match(
+    f.monitor.status("s1"),
+    /Checkout: \/repo-fix-dexa-vat-apoe-review/,
+  );
+  f.failure();
+  await f.monitor.sweep();
+  assert.equal(f.deliveries.length, 1);
+  const text = f.deliveries[0]!.text;
+  assert.match(
+    text,
+    /checked out in the worktree "\/repo-fix-dexa-vat-apoe-review", not in this session's directory "\/work"/,
+  );
+  assert.match(text, /git -C/);
+  assert.equal(f.deliveries[0]?.checkout, "/repo-fix-dexa-vat-apoe-review");
+});
+
+test("no worktree with the PR branch keeps monitoring CI and reviews and says so", async () => {
+  const f = fixture();
+  f.local.present = false;
+  assert.match(await f.enable(), /PR monitor: on/);
+  assert.equal(f.persisted()?.checkout, null);
+  assert.match(f.monitor.status("s1"), /no worktree has branch fix/);
+  f.failure();
+  f.snap.comments = [comment("review")];
+  await f.monitor.sweep();
+  assert.equal(f.deliveries.length, 1);
+  assert.deepEqual(f.deliveries[0]?.comments, ["review"]);
+  assert.match(
+    f.deliveries[0]!.text,
+    /No worktree of this repository has the PR branch "fix" checked out/,
+  );
+  assert.equal(f.deliveries[0]?.checkout, null);
+  assert.equal(f.persisted()?.errors, 0);
+});
+
+test("conflicts wait for a clean PR checkout; no worktree pauses them", async () => {
+  const f = fixture();
+  f.local.present = false;
+  await f.enable();
+  f.snap.mergeable = false;
+  await f.monitor.sweep();
+  assert.equal(f.deliveries.length, 0);
+  assert.match(f.persisted()?.reason ?? "", /no worktree has the PR branch/);
+  f.local.present = true;
+  f.local.root = "/other-worktree";
+  f.advance();
+  await f.monitor.sweep();
+  assert.equal(f.deliveries.length, 1);
+  assert.match(f.deliveries[0]!.text, /"\/other-worktree"/);
+});
+
+test("a worktree behind or ahead of the PR head is reported, not refused", async () => {
+  const f = fixture();
+  await f.enable();
+  f.snap.head = "sha2";
+  f.failure();
+  await f.monitor.sweep();
+  assert.equal(f.deliveries.length, 1);
+  assert.match(
+    f.deliveries[0]!.text,
+    /Its HEAD "sha1" differs from the PR head; reconcile it/,
+  );
+  assert.equal(f.persisted()?.errors, 0);
+});
+
+test("a detached worktree at the PR head counts as the checkout", async () => {
+  const f = fixture();
+  f.local.branch = null;
+  f.local.root = "/detached";
+  await f.enable();
+  assert.equal(f.persisted()?.checkout, "/detached");
+  f.failure();
+  await f.monitor.sweep();
+  assert.match(f.deliveries[0]!.text, /detached HEAD at the PR head/);
+});
+
+test("a queued request is withheld when the PR checkout moves before admission", async () => {
   const f = fixture();
   await f.enable();
   f.failure();
-  f.local.branch = "main";
+  f.failAdmission();
   await f.monitor.sweep();
-  assert.equal(f.deliveries.length, 0);
-  f.local.branch = "fix";
-  f.snap.head = "sha2";
+  assert.equal(f.deliveries.length, 1);
+  f.failAdmission(false);
+  f.local.root = "/moved";
   f.advance();
   await f.monitor.sweep();
-  assert.equal(f.deliveries.length, 0);
-  f.local.head = "sha2";
+  // The old text named /work, so it is dropped rather than admitted.
+  assert.equal(f.deliveries.length, 1);
+  assert.equal(f.persisted()?.pending, null);
+  assert.match(f.persisted()?.reason ?? "", /withheld/);
   f.advance();
   await f.monitor.sweep();
+  assert.equal(f.deliveries.length, 2);
+  assert.match(f.deliveries[1]!.text, /"\/moved"/);
+});
+
+test("checkout note quotes paths so they cannot open tags", () => {
+  const note = checkoutNote("/work", "fix", "sha1", {
+    root: "/x<tag>",
+    branch: "fix",
+    head: "sha1",
+    dirty: false,
+    operation: false,
+  });
+  assert.ok(!note.includes("<"));
+  assert.match(
+    checkoutNote("/work", "fix", "sha1", {
+      root: "/work",
+      branch: "fix",
+      head: "sha1",
+      dirty: false,
+      operation: false,
+    }),
+    /checked out in this session's directory "\/work"\.\n$/,
+  );
+});
+
+test("enabling asks the permission port once and sweeps never ask again", async () => {
+  const f = fixture();
+  let asked = 0;
+  f.ports.permission = async () => {
+    asked++;
+  };
+  await f.enable();
+  f.failure();
+  for (let i = 0; i < 3; i++) {
+    await f.monitor.sweep();
+    f.advance();
+  }
+  assert.equal(asked, 1);
   assert.equal(f.deliveries.length, 1);
 });
 
@@ -627,7 +763,12 @@ test("dirty tree discovered during final conflict check blocks delivery", async 
   await f.enable();
   f.snap.mergeable = false;
   let reads = 0;
-  f.ports.local = async () => ({ ...f.local, dirty: ++reads > 1 });
+  const read = f.ports.local;
+  f.ports.local = async (target, signal) => {
+    const result = await read(target, signal);
+    if (++reads > 1 && result.checkout) result.checkout.dirty = true;
+    return result;
+  };
   await f.monitor.sweep();
   assert.equal(f.deliveries.length, 0);
   assert.equal(f.persisted()?.pending, null);
@@ -673,7 +814,7 @@ test("automatic activation rejects old, foreign, stale and invalid creation evid
       f.snap.author = "someone-else";
     },
     (f: ReturnType<typeof fixture>) => {
-      f.local.head = "stale";
+      f.local.repo = "someone/else";
     },
     (f: ReturnType<typeof fixture>) => {
       f.snap.headRepo = "fork/project";
@@ -690,6 +831,14 @@ test("automatic activation rejects old, foreign, stale and invalid creation evid
     await assert.rejects(f.monitor.created("s1", url, 1_000_000, 1_001_000));
     assert.equal(f.persisted(), undefined);
   }
+});
+
+test("a PR created from another worktree activates and names that worktree", async () => {
+  const f = fixture();
+  f.local.root = "/repo-fix-dexa-vat-apoe-review";
+  await f.monitor.created("s1", url, 1_000_000, 1_001_000);
+  assert.deepEqual(f.monitor.view("s1"), { enabled: true, url });
+  assert.equal(f.persisted()?.checkout, "/repo-fix-dexa-vat-apoe-review");
 });
 
 test("automatic activation preserves denial and revalidates after permission", async () => {

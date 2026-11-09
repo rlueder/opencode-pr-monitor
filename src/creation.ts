@@ -2,7 +2,7 @@ import type { Plugin } from "@opencode/plugin";
 import { parsePR } from "./types.ts";
 
 // Deliberately not a shell parser: unsupported syntax keeps manual controls.
-export function directCreate(tool: string, input: unknown, directory: string) {
+export function directCreate(tool: string, input: unknown) {
   if (!["shell", "bash", "functions.shell", "functions_shell"].includes(tool))
     return false;
   if (
@@ -12,8 +12,12 @@ export function directCreate(tool: string, input: unknown, directory: string) {
     typeof input.command !== "string"
   )
     return false;
-  if ("workdir" in input && input.workdir !== directory) return false;
-  if ("cwd" in input && input.cwd !== directory) return false;
+  // The PR is often created from another worktree of the same repository. Any
+  // working directory is accepted here; activation still requires the PR to
+  // belong to the session's origin repository and to be authored by the viewer
+  // during this call.
+  if ("workdir" in input && typeof input.workdir !== "string") return false;
+  if ("cwd" in input && typeof input.cwd !== "string") return false;
   const words: string[] = [];
   let word = "",
     quote = "",
@@ -83,12 +87,11 @@ export class CreationCalls {
   private calls = new Map<string, number>();
   private closed = false;
   constructor(
-    private readonly directory: string,
     private readonly created: Created,
     private readonly now = Date.now,
   ) {}
   before(session: string, id: string, tool: string, input: unknown) {
-    if (!this.closed && directCreate(tool, input, this.directory)) {
+    if (!this.closed && directCreate(tool, input)) {
       if (this.calls.size >= 1000)
         this.calls.delete(this.calls.keys().next().value!);
       this.calls.set(`${session}/${id}`, this.now());
@@ -108,7 +111,7 @@ export class CreationCalls {
       this.closed ||
       started === undefined ||
       text === undefined ||
-      !directCreate(tool, input, this.directory)
+      !directCreate(tool, input)
     )
       return;
     const url = createdURL(text);
@@ -124,11 +127,10 @@ export class CreationCalls {
 
 export async function watchCreations(
   tool: Pick<Plugin.Context["tool"], "hook">,
-  directory: string,
   created: Created,
   now = Date.now,
 ) {
-  const calls = new CreationCalls(directory, created, now);
+  const calls = new CreationCalls(created, now);
   const before = await tool.hook("execute.before", (event) => {
     calls.before(event.sessionID, event.id, event.tool, event.input);
   });
