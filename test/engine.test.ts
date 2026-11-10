@@ -1,11 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { Monitor, COOLDOWN, POLL } from "../src/engine.ts";
+import { Monitor, COOLDOWN, POLL, checkoutNote } from "../src/engine.ts";
 import { decodeBinding, parsePR } from "../src/types.ts";
 import type {
   Binding,
   Comment,
-  Local,
   Outbox,
   Ports,
   Snapshot,
@@ -15,6 +14,7 @@ const url = "https://github.com/acme/project/pull/42";
 function fixture() {
   let now = 1_000_000;
   let persisted: Binding | undefined;
+  let optOuts: string[] = [];
   let calls = 0;
   let admits = 0;
   let denied = false;
@@ -25,15 +25,21 @@ function fixture() {
   let beforeRead: (() => Promise<void>) | undefined;
   let freshHead = "";
   const deliveries: Outbox[] = [];
-  const local: Local = {
-    root: "/work",
+  // One worktree of the session's repository. `present: false` means no
+  // worktree has the PR branch (or its head, when detached) checked out.
+  const local = {
     repo: "acme/project",
-    branch: "fix",
+    root: "/work",
+    branch: "fix" as string | null,
     head: "sha1",
     dirty: false,
     operation: false,
+    present: true,
   };
+  const targets: { branch: string; head: string }[] = [];
   const snap: Snapshot = {
+    author: "me",
+    created: now,
     state: "open",
     head: "sha1",
     base: "base1",
@@ -49,6 +55,10 @@ function fixture() {
     now: () => now,
     id: () => `msg_test_${++admits}`,
     load: async () => structuredClone(persisted),
+    loadOptOuts: async () => [...optOuts],
+    saveOptOuts: async (sessions) => {
+      optOuts = [...sessions];
+    },
     save: async (b) => {
       persisted = structuredClone(b);
     },
@@ -56,7 +66,25 @@ function fixture() {
     permission: async () => {
       if (denied) throw new Error("Denied");
     },
-    local: async () => structuredClone(local),
+    local: async (target) => {
+      targets.push({ ...target });
+      const match =
+        local.present &&
+        (local.branch === target.branch ||
+          (local.branch === null && local.head === target.head));
+      return {
+        repo: local.repo,
+        checkout: match
+          ? {
+              root: local.root,
+              branch: local.branch,
+              head: local.head,
+              dirty: local.dirty,
+              operation: local.operation,
+            }
+          : null,
+      };
+    },
     snapshot: async (_pr, signal) => {
       calls++;
       await beforeRead?.();
@@ -77,6 +105,7 @@ function fixture() {
     local,
     snap,
     deliveries,
+    targets,
     advance: (ms = COOLDOWN) => {
       now += ms;
     },
@@ -141,6 +170,36 @@ test("UI status is read-only, session-scoped and reflects explicit controls", as
   assert.equal(f.calls(), reads);
   await f.monitor.command("s1", "off");
   assert.deepEqual(f.monitor.view("s1"), { enabled: false, url });
+});
+
+test("an early timer tick rearms for the remaining deadline, not another full minute", async () => {
+  const f = fixture();
+  assert.equal(f.monitor.nextDelay(), POLL);
+  await f.monitor.created("s1", url, 1_000_000, 1_001_000);
+  assert.equal(f.monitor.nextDelay(), POLL);
+  f.advance(POLL / 2);
+  await f.monitor.sweep();
+  assert.equal(f.monitor.nextDelay(), POLL / 2);
+  const reads = f.calls();
+  f.advance(POLL / 2);
+  await f.monitor.sweep();
+  assert.equal(f.calls(), reads + 1);
+});
+
+test("an overdue binding does not spin the timer while permission is pending", async () => {
+  const f = fixture();
+  await f.enable();
+  let approve!: () => void;
+  f.ports.permission = async () =>
+    new Promise<void>((resolve) => {
+      approve = resolve;
+    });
+  const enabling = f.enable();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(f.monitor.nextDelay(), POLL);
+  approve();
+  await enabling;
+  assert.equal(f.monitor.nextDelay(), 0);
 });
 
 test("merged or closed PR is reported before a stale checkout mismatch", async () => {
@@ -328,7 +387,7 @@ test("uncertain conflict delivery invalidated by unknown mergeability", async ()
   assert.equal(f.persisted()?.pending, null);
 });
 
-test("baseline old comments; eligible feedback only; quote and truncate untrusted text", async () => {
+test("catch up old comments; eligible feedback only; quote and truncate untrusted text", async () => {
   const f = fixture();
   f.snap.comments = [comment("old")];
   await f.enable();
@@ -349,7 +408,7 @@ test("baseline old comments; eligible feedback only; quote and truncate untruste
   await f.monitor.sweep();
   assert.equal(f.deliveries.length, 1);
   const box = f.deliveries[0]!;
-  assert.deepEqual(box.comments, ["app", "owner", "collaborator"]);
+  assert.deepEqual(box.comments, ["old", "app", "owner", "collaborator"]);
   assert.ok(box.text.length < 6000);
   assert.ok(!box.text.includes("<ci-monitor-event>"));
   assert.match(box.text, /UNTRUSTED/);
@@ -359,20 +418,11 @@ test("baseline old comments; eligible feedback only; quote and truncate untruste
   assert.equal(f.deliveries.length, 1);
 });
 
-test("foreign session/repo/root/branch/head/fork all fail closed", async () => {
+test("foreign session, foreign repository and fork PRs fail closed", async () => {
   for (const change of [
     (f: ReturnType<typeof fixture>) => f.move(),
     (f: ReturnType<typeof fixture>) => {
       f.local.repo = "someone/else";
-    },
-    (f: ReturnType<typeof fixture>) => {
-      f.local.root = "/other";
-    },
-    (f: ReturnType<typeof fixture>) => {
-      f.local.branch = "main";
-    },
-    (f: ReturnType<typeof fixture>) => {
-      f.local.head = "wrong";
     },
     (f: ReturnType<typeof fixture>) => {
       f.snap.headRepo = "fork/project";
@@ -385,21 +435,144 @@ test("foreign session/repo/root/branch/head/fork all fail closed", async () => {
   }
 });
 
-test("branch switch and new remote push wait for exact checkout", async () => {
+test("enable works when the session directory is a different worktree than the PR checkout", async () => {
+  const f = fixture();
+  // Session runs in /work on another branch; the PR branch lives elsewhere.
+  f.local.root = "/repo-fix-dexa-vat-apoe-review";
+  assert.match(await f.enable(), /PR monitor: on/);
+  assert.deepEqual(f.targets.at(-1), { branch: "fix", head: "sha1" });
+  assert.equal(f.persisted()?.checkout, "/repo-fix-dexa-vat-apoe-review");
+  assert.match(
+    f.monitor.status("s1"),
+    /Checkout: \/repo-fix-dexa-vat-apoe-review/,
+  );
+  f.failure();
+  await f.monitor.sweep();
+  assert.equal(f.deliveries.length, 1);
+  const text = f.deliveries[0]!.text;
+  assert.match(
+    text,
+    /checked out in the worktree "\/repo-fix-dexa-vat-apoe-review", not in this session's directory "\/work"/,
+  );
+  assert.match(text, /git -C/);
+  assert.equal(f.deliveries[0]?.checkout, "/repo-fix-dexa-vat-apoe-review");
+});
+
+test("no worktree with the PR branch keeps monitoring CI and reviews and says so", async () => {
+  const f = fixture();
+  f.local.present = false;
+  assert.match(await f.enable(), /PR monitor: on/);
+  assert.equal(f.persisted()?.checkout, null);
+  assert.match(f.monitor.status("s1"), /no worktree has branch fix/);
+  f.failure();
+  f.snap.comments = [comment("review")];
+  await f.monitor.sweep();
+  assert.equal(f.deliveries.length, 1);
+  assert.deepEqual(f.deliveries[0]?.comments, ["review"]);
+  assert.match(
+    f.deliveries[0]!.text,
+    /No worktree of this repository has the PR branch "fix" checked out/,
+  );
+  assert.equal(f.deliveries[0]?.checkout, null);
+  assert.equal(f.persisted()?.errors, 0);
+});
+
+test("conflicts wait for a clean PR checkout; no worktree pauses them", async () => {
+  const f = fixture();
+  f.local.present = false;
+  await f.enable();
+  f.snap.mergeable = false;
+  await f.monitor.sweep();
+  assert.equal(f.deliveries.length, 0);
+  assert.match(f.persisted()?.reason ?? "", /no worktree has the PR branch/);
+  f.local.present = true;
+  f.local.root = "/other-worktree";
+  f.advance();
+  await f.monitor.sweep();
+  assert.equal(f.deliveries.length, 1);
+  assert.match(f.deliveries[0]!.text, /"\/other-worktree"/);
+});
+
+test("a worktree behind or ahead of the PR head is reported, not refused", async () => {
+  const f = fixture();
+  await f.enable();
+  f.snap.head = "sha2";
+  f.failure();
+  await f.monitor.sweep();
+  assert.equal(f.deliveries.length, 1);
+  assert.match(
+    f.deliveries[0]!.text,
+    /Its HEAD "sha1" differs from the PR head; reconcile it/,
+  );
+  assert.equal(f.persisted()?.errors, 0);
+});
+
+test("a detached worktree at the PR head counts as the checkout", async () => {
+  const f = fixture();
+  f.local.branch = null;
+  f.local.root = "/detached";
+  await f.enable();
+  assert.equal(f.persisted()?.checkout, "/detached");
+  f.failure();
+  await f.monitor.sweep();
+  assert.match(f.deliveries[0]!.text, /detached HEAD at the PR head/);
+});
+
+test("a queued request is withheld when the PR checkout moves before admission", async () => {
   const f = fixture();
   await f.enable();
   f.failure();
-  f.local.branch = "main";
+  f.failAdmission();
   await f.monitor.sweep();
-  assert.equal(f.deliveries.length, 0);
-  f.local.branch = "fix";
-  f.snap.head = "sha2";
+  assert.equal(f.deliveries.length, 1);
+  f.failAdmission(false);
+  f.local.root = "/moved";
   f.advance();
   await f.monitor.sweep();
-  assert.equal(f.deliveries.length, 0);
-  f.local.head = "sha2";
+  // The old text named /work, so it is dropped rather than admitted.
+  assert.equal(f.deliveries.length, 1);
+  assert.equal(f.persisted()?.pending, null);
+  assert.match(f.persisted()?.reason ?? "", /withheld/);
   f.advance();
   await f.monitor.sweep();
+  assert.equal(f.deliveries.length, 2);
+  assert.match(f.deliveries[1]!.text, /"\/moved"/);
+});
+
+test("checkout note quotes paths so they cannot open tags", () => {
+  const note = checkoutNote("/work", "fix", "sha1", {
+    root: "/x<tag>",
+    branch: "fix",
+    head: "sha1",
+    dirty: false,
+    operation: false,
+  });
+  assert.ok(!note.includes("<"));
+  assert.match(
+    checkoutNote("/work", "fix", "sha1", {
+      root: "/work",
+      branch: "fix",
+      head: "sha1",
+      dirty: false,
+      operation: false,
+    }),
+    /checked out in this session's directory "\/work"\.\n$/,
+  );
+});
+
+test("enabling asks the permission port once and sweeps never ask again", async () => {
+  const f = fixture();
+  let asked = 0;
+  f.ports.permission = async () => {
+    asked++;
+  };
+  await f.enable();
+  f.failure();
+  for (let i = 0; i < 3; i++) {
+    await f.monitor.sweep();
+    f.advance();
+  }
+  assert.equal(asked, 1);
   assert.equal(f.deliveries.length, 1);
 });
 
@@ -590,8 +763,152 @@ test("dirty tree discovered during final conflict check blocks delivery", async 
   await f.enable();
   f.snap.mergeable = false;
   let reads = 0;
-  f.ports.local = async () => ({ ...f.local, dirty: ++reads > 1 });
+  const read = f.ports.local;
+  f.ports.local = async (target, signal) => {
+    const result = await read(target, signal);
+    if (++reads > 1 && result.checkout) result.checkout.dirty = true;
+    return result;
+  };
   await f.monitor.sweep();
   assert.equal(f.deliveries.length, 0);
   assert.equal(f.persisted()?.pending, null);
+});
+
+test("new session-owned PR requests permission immediately and catches up pre-approval feedback", async () => {
+  const f = fixture();
+  let approve!: () => void;
+  f.ports.permission = async () =>
+    new Promise<void>((resolve) => {
+      approve = resolve;
+    });
+  const activation = f.monitor.created("s1", url, 1_000_000, 1_001_000);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(typeof approve, "function");
+  assert.equal(f.persisted(), undefined);
+  f.snap.comments = [comment("review-before-approval")];
+  f.advance();
+  approve();
+  await activation;
+  assert.equal(f.monitor.view("s1").enabled, true);
+  assert.deepEqual(f.deliveries[0]?.comments, ["review-before-approval"]);
+  assert.equal(f.persisted()?.attempts, 1);
+  await f.monitor.created("s1", url, 1_000_000, 1_001_000);
+  assert.equal(f.persisted()?.attempts, 1);
+  f.advance();
+  await f.monitor.sweep();
+  assert.equal(f.deliveries.length, 1);
+});
+
+test("automatic activation rejects old, foreign, stale and invalid creation evidence before permission", async () => {
+  for (const change of [
+    (f: ReturnType<typeof fixture>) => {
+      f.snap.created = 999_000;
+    },
+    (f: ReturnType<typeof fixture>) => {
+      f.snap.created = 1_002_000;
+    },
+    (f: ReturnType<typeof fixture>) => {
+      f.snap.created = NaN;
+    },
+    (f: ReturnType<typeof fixture>) => {
+      f.snap.author = "someone-else";
+    },
+    (f: ReturnType<typeof fixture>) => {
+      f.local.repo = "someone/else";
+    },
+    (f: ReturnType<typeof fixture>) => {
+      f.snap.headRepo = "fork/project";
+    },
+    (f: ReturnType<typeof fixture>) => {
+      f.move();
+    },
+  ]) {
+    const f = fixture();
+    change(f);
+    f.ports.permission = async () => {
+      assert.fail("Must validate ownership before permission");
+    };
+    await assert.rejects(f.monitor.created("s1", url, 1_000_000, 1_001_000));
+    assert.equal(f.persisted(), undefined);
+  }
+});
+
+test("a PR created from another worktree activates and names that worktree", async () => {
+  const f = fixture();
+  f.local.root = "/repo-fix-dexa-vat-apoe-review";
+  await f.monitor.created("s1", url, 1_000_000, 1_001_000);
+  assert.deepEqual(f.monitor.view("s1"), { enabled: true, url });
+  assert.equal(f.persisted()?.checkout, "/repo-fix-dexa-vat-apoe-review");
+});
+
+test("automatic activation preserves denial and revalidates after permission", async () => {
+  const denied = fixture();
+  denied.deny();
+  await assert.rejects(
+    denied.monitor.created("s1", url, 1_000_000, 1_001_000),
+    /Denied/,
+  );
+  assert.equal(denied.persisted(), undefined);
+  const moved = fixture();
+  moved.ports.permission = async () => {
+    moved.move();
+  };
+  await assert.rejects(
+    moved.monitor.created("s1", url, 1_000_000, 1_001_000),
+    /Session moved/,
+  );
+});
+
+test("explicit off without a binding survives reload and only explicit on clears it", async () => {
+  const f = fixture();
+  await f.monitor.command("s1", "off");
+  await f.monitor.close();
+  const restarted = new Monitor(f.ports);
+  await restarted.init();
+  await restarted.created("s1", url, 1_000_000, 1_001_000);
+  assert.equal(f.calls(), 0);
+  await restarted.command("s1", `on ${url}`);
+  assert.equal(restarted.view("s1").enabled, true);
+});
+
+test("off and unload prevent late automatic activation approval", async () => {
+  for (const action of ["off", "close"] as const) {
+    const f = fixture();
+    let approve!: () => void;
+    f.ports.permission = async () =>
+      new Promise<void>((resolve) => {
+        approve = resolve;
+      });
+    const activation = f.monitor.created("s1", url, 1_000_000, 1_001_000);
+    await new Promise((resolve) => setImmediate(resolve));
+    const stopping =
+      action === "off" ? f.monitor.command("s1", "off") : f.monitor.close();
+    approve();
+    await assert.rejects(activation, /cancelled/);
+    await stopping;
+    assert.equal(f.persisted(), undefined);
+    assert.equal(f.deliveries.length, 0);
+  }
+});
+
+test("automatic activation never replaces another session or an open PR", async () => {
+  const f = fixture();
+  await f.enable();
+  const calls = f.calls();
+  await f.monitor.created("s2", url, 1_000_000, 1_001_000);
+  await f.monitor.created("s1", url.replace("42", "43"), 1_000_000, 1_001_000);
+  assert.equal(f.calls(), calls);
+  assert.equal(f.persisted()?.pr.url, url);
+});
+
+test("new PR replaces the same session's merged PR without waiting for the timer", async () => {
+  const f = fixture();
+  await f.enable();
+  f.ports.head = async (pr) => ({
+    head: f.snap.head,
+    state: pr.number === 42 ? "merged" : "open",
+  });
+  const next = url.replace("42", "43");
+  await f.monitor.created("s1", next, 1_000_000, 1_001_000);
+  assert.deepEqual(f.monitor.view("s1"), { enabled: true, url: next });
 });

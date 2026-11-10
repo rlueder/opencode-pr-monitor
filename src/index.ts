@@ -1,9 +1,11 @@
 import { realpath } from "node:fs/promises";
 import { Plugin } from "@opencode/plugin";
-import { Monitor, POLL } from "./engine.ts";
+import { Monitor } from "./engine.ts";
 import { GitHub, readLocal, runner } from "./github.ts";
 import { decodeBinding } from "./types.ts";
-import { MonitorUI } from "./rpc.ts";
+import { MonitorUI, STATUS_SOURCE, statusAction } from "./rpc.ts";
+import { watchCreations } from "./creation.ts";
+import { assertEnable } from "./permission.ts";
 
 // The V2 runtime owns one active plugin/location. This extra guard also protects
 // accidental duplicate setup in the same module instance during reload.
@@ -17,11 +19,25 @@ export default Plugin.define({
     const run = runner(directory);
     const github = new GitHub(run);
     const key = `binding/v1/${encodeURIComponent(directory)}`;
+    const optOutKey = `auto-off/v1/${encodeURIComponent(directory)}`;
     const monitor = new Monitor({
       directory,
       now: Date.now,
       id: () => `msg_prmonitor_${crypto.randomUUID().replaceAll("-", "")}`,
       load: async () => decodeBinding(await ctx.storage.get(key)),
+      loadOptOuts: async () => {
+        const value = await ctx.storage.get(optOutKey);
+        if (value === undefined) return [];
+        if (
+          !Array.isArray(value) ||
+          !value.every((s): s is string => typeof s === "string")
+        )
+          throw new Error("Invalid monitor opt-out storage");
+        return value;
+      },
+      saveOptOuts: async (sessions) => {
+        await ctx.storage.set(optOutKey, sessions);
+      },
       save: async (b) => {
         await ctx.storage.set(key, b);
       },
@@ -37,32 +53,9 @@ export default Plugin.define({
           archived: s.time.archived !== undefined,
         };
       },
-      permission: async (sessionID, url, signal) => {
-        // assert has no cancellation API in 2.1.4. Stop awaiting locally on unload;
-        // the host-owned permission request may still need user dismissal.
-        await new Promise<void>((accept, reject) => {
-          const abort = () => reject(new Error("Enable cancelled"));
-          if (signal.aborted) {
-            abort();
-            return;
-          }
-          signal.addEventListener("abort", abort, { once: true });
-          void ctx.permission
-            .assert({
-              sessionID,
-              action: "pr-monitor.enable",
-              resources: [url],
-              save: [url],
-              metadata: {
-                description:
-                  "Read this PR in the background and queue bounded repair requests in this session. This does not approve commits or pushes.",
-              },
-            })
-            .then(accept, reject)
-            .finally(() => signal.removeEventListener("abort", abort));
-        });
-      },
-      local: (signal) => readLocal(directory, run, signal),
+      permission: (sessionID, url, signal) =>
+        assertEnable(ctx.permission, sessionID, url, signal),
+      local: (target, signal) => readLocal(directory, target, run, signal),
       snapshot: (pr, signal) => github.snapshot(pr, signal),
       head: (pr, signal) => github.head(pr, signal),
       deliver: async (sessionID, box, signal) => {
@@ -80,6 +73,11 @@ export default Plugin.define({
       },
     });
     await monitor.init();
+    const stopCreations = await watchCreations(
+      ctx.tool,
+      (session, url, started, ended) =>
+        monitor.created(session, url, started, ended),
+    );
     const rpc = await ctx.rpc.register(MonitorUI, {
       status: async (input) => {
         if (
@@ -111,7 +109,12 @@ export default Plugin.define({
             description: "PR monitor status",
             delivery: "queue",
             resume: false,
-            metadata: { source: "opencode.pr-monitor.status" },
+            // The TUI ignores on/off replies: its toggle already dismissed
+            // the notice, and the reply must not reopen it.
+            metadata: {
+              source: STATUS_SOURCE,
+              action: statusAction(prompt.text),
+            },
           });
         },
       });
@@ -128,7 +131,7 @@ export default Plugin.define({
           .finally(() => {
             if (!closed) schedule();
           });
-      }, POLL);
+      }, monitor.nextDelay());
       timer.unref();
     };
     schedule();
@@ -136,6 +139,7 @@ export default Plugin.define({
       if (closed) return;
       closed = true;
       clearTimeout(timer);
+      await stopCreations();
       await monitor.close();
       await registration.dispose();
       await rpc.dispose();

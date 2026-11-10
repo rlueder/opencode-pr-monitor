@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { realpath, stat } from "node:fs/promises";
 import { resolve } from "node:path";
-import type { Comment, Local, PR, Snapshot } from "./types.ts";
+import type { Comment, Local, PR, Snapshot, Target } from "./types.ts";
 
 export type Runner = (
   file: string,
@@ -89,20 +89,91 @@ export function remoteRepo(url: string): string {
   return match[1].toLowerCase();
 }
 
+export type Worktree = {
+  path: string;
+  head: string | null;
+  branch: string | null;
+  bare: boolean;
+  prunable: boolean;
+};
+
+// Parses `git worktree list --porcelain -z`: NUL-terminated attribute lines,
+// with an empty field ending each worktree record.
+export function parseWorktrees(raw: string): Worktree[] {
+  const trees: Worktree[] = [];
+  let current: Worktree | undefined;
+  for (const field of raw.split("\0")) {
+    if (!field) {
+      current = undefined;
+      continue;
+    }
+    const space = field.indexOf(" ");
+    const name = space === -1 ? field : field.slice(0, space);
+    const value = space === -1 ? "" : field.slice(space + 1);
+    if (name === "worktree") {
+      current = {
+        path: value,
+        head: null,
+        branch: null,
+        bare: false,
+        prunable: false,
+      };
+      trees.push(current);
+    } else if (!current) throw new Error("Malformed worktree list");
+    else if (name === "HEAD") current.head = value;
+    else if (name === "branch") current.branch = value;
+    else if (name === "bare") current.bare = true;
+    else if (name === "prunable") current.prunable = true;
+  }
+  return trees;
+}
+
+async function existing(path: string) {
+  try {
+    return await realpath(path);
+  } catch {
+    return undefined;
+  }
+}
+
+// Reads the session's repository and finds the worktree that has the PR checked
+// out. The session directory itself may be any worktree of that repository.
 export async function readLocal(
   directory: string,
+  target: Target,
   run: Runner,
   signal: AbortSignal,
 ): Promise<Local> {
-  const git = (...args: string[]) =>
-    run("git", args, signal).then((s) => s.trim());
-  const [root, origin, branch, head, status, gitdir] = await Promise.all([
-    git("rev-parse", "--show-toplevel"),
+  const git = (...args: string[]) => run("git", args, signal);
+  const [origin, list] = await Promise.all([
     git("remote", "get-url", "origin"),
-    git("symbolic-ref", "--quiet", "--short", "HEAD"),
-    git("rev-parse", "HEAD"),
-    git("status", "--porcelain", "--untracked-files=normal"),
-    git("rev-parse", "--absolute-git-dir"),
+    git("worktree", "list", "--porcelain", "-z"),
+  ]);
+  const repo = remoteRepo(origin);
+  const trees = parseWorktrees(list).filter(
+    (tree) => !tree.bare && !tree.prunable && !!tree.head,
+  );
+  let chosen = target.branch
+    ? trees.find((tree) => tree.branch === `refs/heads/${target.branch}`)
+    : undefined;
+  let root = chosen ? await existing(chosen.path) : undefined;
+  if (!chosen) {
+    // A detached checkout of the exact PR head also counts. Prefer the
+    // session's own directory when several qualify.
+    for (const tree of trees.filter(
+      (t) => t.branch === null && t.head === target.head,
+    )) {
+      const path = await existing(tree.path);
+      if (path && (!root || path === directory)) {
+        root = path;
+        chosen = tree;
+      }
+    }
+  }
+  if (!chosen?.head || !root) return { repo, checkout: null };
+  const [status, gitdir] = await Promise.all([
+    git("-C", root, "status", "--porcelain", "--untracked-files=normal"),
+    git("-C", root, "rev-parse", "--absolute-git-dir").then((s) => s.trim()),
   ]);
   const operations = await Promise.all(
     [
@@ -129,16 +200,17 @@ export async function readLocal(
       ),
     ),
   );
-  const canonical = await realpath(root);
-  if (canonical !== directory)
-    throw new Error("Plugin location must be the worktree root");
   return {
-    root: canonical,
-    repo: remoteRepo(origin),
-    branch,
-    head,
-    dirty: !!status,
-    operation: operations.some(Boolean),
+    repo,
+    checkout: {
+      root,
+      branch: chosen.branch?.startsWith("refs/heads/")
+        ? chosen.branch.slice("refs/heads/".length)
+        : null,
+      head: chosen.head,
+      dirty: !!status.trim(),
+      operation: operations.some(Boolean),
+    },
   };
 }
 
@@ -149,7 +221,7 @@ export const HEAD_QUERY =
 export const QUERY = `query Monitor($owner:String!,$repo:String!,$number:Int!) {
   viewer { login }
   repository(owner:$owner,name:$repo) { pullRequest(number:$number) {
-    state headRefOid baseRefOid headRefName headRepository { nameWithOwner } mergeable
+    state createdAt author { login } headRefOid baseRefOid headRefName headRepository { nameWithOwner } mergeable
     commits(last:1) { nodes { commit { statusCheckRollup { contexts(first:100) {
       ${page} nodes {
         ... on CheckRun { id name status conclusion completedAt detailsUrl }
@@ -158,7 +230,7 @@ export const QUERY = `query Monitor($owner:String!,$repo:String!,$number:Int!) {
     } } } } }
     comments(first:100) { ${page} nodes { ${author} } }
     reviews(first:100) { ${page} nodes { ${author} state } }
-    reviewThreads(first:100) { ${page} nodes { comments(first:100) { ${page} nodes { ${author} } } } }
+    reviewThreads(first:100) { ${page} nodes { isResolved isOutdated comments(first:100) { ${page} nodes { ${author} } } } }
   } }
 }`;
 
@@ -195,6 +267,8 @@ export function decodeSnapshot(raw: string): Snapshot {
   if (pr.state === "CLOSED" || pr.state === "MERGED")
     return {
       state: str(pr.state).toLowerCase(),
+      author: "",
+      created: 0,
       head: "",
       base: "",
       branch: "",
@@ -208,10 +282,23 @@ export function decodeSnapshot(raw: string): Snapshot {
   if (!commit) throw new Error("Missing PR head commit");
   const rollup = object(commit.commit).statusCheckRollup;
   const checks = rollup === null ? [] : nodes(object(rollup).contexts);
+  const created = Date.parse(str(pr.createdAt));
+  if (!Number.isFinite(created))
+    throw new Error("Invalid GitHub creation time");
   const comments = [
     ...nodes(pr.comments),
-    ...nodes(pr.reviews).filter((c) => c.state !== "PENDING"),
-    ...nodes(pr.reviewThreads).flatMap((thread) => nodes(thread.comments)),
+    ...nodes(pr.reviews).filter(
+      (c) => !["PENDING", "DISMISSED"].includes(String(c.state)),
+    ),
+    ...nodes(pr.reviewThreads).flatMap((thread) => {
+      if (
+        typeof thread.isResolved !== "boolean" ||
+        typeof thread.isOutdated !== "boolean"
+      )
+        throw new Error("Incomplete GitHub thread state");
+      const comments = nodes(thread.comments);
+      return thread.isResolved || thread.isOutdated ? [] : comments;
+    }),
   ].map((c): Comment => {
     const a =
       c.author === null
@@ -228,6 +315,8 @@ export function decodeSnapshot(raw: string): Snapshot {
   });
   return {
     state: str(pr.state).toLowerCase(),
+    author: pr.author === null ? "" : str(object(pr.author).login),
+    created,
     head: str(pr.headRefOid),
     base: str(pr.baseRefOid),
     branch: str(pr.headRefName),

@@ -1,12 +1,18 @@
 export type PR = { url: string; repo: string; number: number };
-export type Local = {
+// A worktree of the session's repository that has the PR branch (or, when
+// detached, the PR head commit) checked out.
+export type Checkout = {
   root: string;
-  repo: string;
-  branch: string;
+  branch: string | null;
   head: string;
   dirty: boolean;
   operation: boolean;
 };
+export type Local = {
+  repo: string;
+  checkout: Checkout | null;
+};
+export type Target = { branch: string; head: string };
 export type Comment = {
   id: string;
   author: string;
@@ -16,6 +22,8 @@ export type Comment = {
   url: string;
 };
 export type Snapshot = {
+  author: string;
+  created: number;
   state: string;
   head: string;
   base: string;
@@ -32,6 +40,8 @@ export type Outbox = {
   text: string;
   keys: string[];
   comments: string[];
+  // Checkout directory named in the text; absent in outboxes from older versions.
+  checkout?: string | null;
 };
 export type Binding = {
   version: 1;
@@ -52,19 +62,23 @@ export type Binding = {
   attempts: number;
   totalAttempts: number;
   pending: Outbox | null;
+  // Last resolved PR checkout; absent until the first sweep or in older versions.
+  checkout?: string | null;
 };
 export interface Ports {
   directory: string;
   now(): number;
   id(): string;
   load(): Promise<Binding | undefined>;
+  loadOptOuts(): Promise<string[]>;
+  saveOptOuts(sessions: string[]): Promise<void>;
   save(binding: Binding): Promise<void>;
   session(
     id: string,
     signal: AbortSignal,
   ): Promise<{ directory: string; archived: boolean }>;
   permission(session: string, url: string, signal: AbortSignal): Promise<void>;
-  local(signal: AbortSignal): Promise<Local>;
+  local(target: Target, signal: AbortSignal): Promise<Local>;
   snapshot(pr: PR, signal: AbortSignal): Promise<Snapshot>;
   head(pr: PR, signal: AbortSignal): Promise<{ head: string; state: string }>;
   deliver(session: string, box: Outbox, signal: AbortSignal): Promise<void>;
@@ -103,12 +117,15 @@ export function decodeBinding(value: unknown): Binding | undefined {
     Array.isArray(x) && x.every((v) => typeof v === "string");
   const object = (x: unknown): x is Record<string, unknown> =>
     !!x && typeof x === "object" && !Array.isArray(x);
+  const checkout = (x: unknown) =>
+    x === undefined || x === null || typeof x === "string";
   if (
     b.version !== 1 ||
     !["session", "directory", "branch", "reason", "head"].every(
       (k) => typeof b[k] === "string",
     ) ||
     typeof b.enabled !== "boolean" ||
+    !checkout(b.checkout) ||
     !strings(b.seen) ||
     !strings(b.delivered) ||
     ![
@@ -137,7 +154,8 @@ export function decodeBinding(value: unknown): Binding | undefined {
             typeof Reflect.get(b.pending, k) === "string",
         ) &&
         strings(b.pending.keys) &&
-        strings(b.pending.comments))
+        strings(b.pending.comments) &&
+        checkout(b.pending.checkout))
     )
   )
     throw new Error("Invalid monitor storage");

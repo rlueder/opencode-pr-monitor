@@ -52,14 +52,37 @@ test("mention reads server status but never enables monitoring", async () => {
   assert.deepEqual(h.commands, []);
 });
 
-test("explicit on/off actions call existing commands and confirm server status", async () => {
+test("Turn on and Turn off call existing commands, confirm server status, then dismiss", async () => {
   const h = await ready();
   await h.notifications.act(key, true);
   assert.deepEqual(h.commands, [`on ${url}`]);
+  assert.deepEqual(h.shown(), []);
+  // A later mention reopens it with the server's state; Turn off also closes it.
+  h.notifications.add("ses_one", url, directory);
+  await Promise.resolve();
   assert.equal(h.shown()[0]?.status?.enabled, true);
   await h.notifications.act(key, false);
   assert.deepEqual(h.commands, [`on ${url}`, "off"]);
-  assert.equal(h.shown()[0]?.status?.enabled, false);
+  assert.deepEqual(h.shown(), []);
+});
+
+test("a toggle dismisses only its own notification", async () => {
+  const h = await ready();
+  h.notifications.add("ses_one", other, directory);
+  await Promise.resolve();
+  await h.notifications.act(key, true);
+  assert.deepEqual(
+    h.shown().map((notice) => notice.url),
+    [other],
+  );
+});
+
+test("Dismiss is not needed after a toggle from the keyboard dialog either", async () => {
+  // The palette command calls the same act() as the button.
+  const h = await ready();
+  await h.notifications.refresh(key);
+  await h.notifications.act(key, !h.shown()[0]?.status?.enabled);
+  assert.deepEqual(h.shown(), []);
 });
 
 test("permission errors leave a retryable notification, not a false on state", async () => {
@@ -103,8 +126,8 @@ test("double click is coalesced while command/permission is pending", async () =
   h.setStatus({ enabled: true, url });
   finish();
   await pending;
-  assert.equal(h.shown()[0]?.busy, false);
-  assert.equal(h.shown()[0]?.error, null);
+  // One confirmed action, after which the notice closes.
+  assert.deepEqual(h.shown(), []);
 });
 
 test("a command that returns without enabling is not presented as successful", async () => {
@@ -162,8 +185,8 @@ test("a repeat mention preserves an in-flight action and its pending permission"
   h.setStatus({ enabled: true, url });
   finish();
   await pending;
-  assert.equal(h.shown()[0]?.status?.enabled, true);
-  assert.equal(h.shown()[0]?.error, null);
+  assert.equal(commands, 1);
+  assert.deepEqual(h.shown(), []);
 });
 
 test("bounded queue preserves session isolation and deduplicates notices", async () => {

@@ -1,8 +1,39 @@
-import type { Binding, Local, Ports, Snapshot } from "./types.ts";
+import type { Binding, Checkout, Local, Ports, Snapshot } from "./types.ts";
 import { parsePR } from "./types.ts";
 
 export const POLL = 60_000;
 export const COOLDOWN = 300_000;
+
+// Paths and branch names are quoted so no value can open or close a tag.
+const quote = (value: string) =>
+  JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e");
+
+// Tells the session where the PR is checked out. The session may run in any
+// worktree of the repository, so the PR checkout is often somewhere else.
+export function checkoutNote(
+  directory: string,
+  branch: string,
+  head: string,
+  checkout: Checkout | null,
+): string {
+  if (!checkout)
+    return (
+      `No worktree of this repository has the PR branch ${quote(branch)} checked out, so this session's directory ${quote(directory)} is not the PR checkout. ` +
+      "CI and review observations are still reported. Do not change code in another branch's checkout: " +
+      "check out the PR branch in a worktree first, following project instructions, or ask.\n"
+    );
+  let note =
+    checkout.root === directory
+      ? `The PR is checked out in this session's directory ${quote(checkout.root)}.`
+      : `The PR is checked out in the worktree ${quote(checkout.root)}, not in this session's directory ${quote(directory)}. ` +
+        "Run Git commands and make changes there, by passing it as the working directory or with git -C.";
+  if (checkout.branch === null)
+    note +=
+      " That worktree has a detached HEAD at the PR head; switch it to the PR branch before committing.";
+  else if (checkout.head !== head)
+    note += ` Its HEAD ${quote(checkout.head)} differs from the PR head; reconcile it before changing anything.`;
+  return `${note}\n`;
+}
 export class Monitor {
   private binding: Binding | undefined;
   private closed = false;
@@ -11,10 +42,18 @@ export class Monitor {
   private control: Promise<unknown> = Promise.resolve();
   private enabling: string | undefined;
   private commanding = false;
+  private optOuts = new Set<string>();
   constructor(private readonly ports: Ports) {}
 
   async init() {
     this.binding = await this.ports.load();
+    this.optOuts = new Set(await this.ports.loadOptOuts());
+    if (
+      this.binding &&
+      !this.binding.enabled &&
+      this.binding.reason.startsWith("Disabled explicitly")
+    )
+      this.optOuts.add(this.binding.session);
   }
   view(session: string) {
     const b = this.binding;
@@ -26,9 +65,22 @@ export class Monitor {
     const b = this.binding;
     if (!b || b.session !== session)
       return "PR monitor: off (no binding for this session).";
-    return `PR monitor: ${b.enabled ? "on" : "off"}\n${b.pr.url}\n${b.reason}\nAdmitted wakeups: ${b.wakes} on head, ${b.total} total. Reserved attempts: ${b.attempts}/3 on head, ${b.totalAttempts}/12 total. Errors: ${b.errors}. Next poll: ${new Date(b.next).toISOString()}.`;
+    const checkout =
+      b.checkout === undefined
+        ? "not resolved yet"
+        : (b.checkout ?? `no worktree has branch ${b.branch} checked out`);
+    return `PR monitor: ${b.enabled ? "on" : "off"}\n${b.pr.url}\nCheckout: ${checkout}\n${b.reason}\nAdmitted wakeups: ${b.wakes} on head, ${b.total} total. Reserved attempts: ${b.attempts}/3 on head, ${b.totalAttempts}/12 total. Errors: ${b.errors}. Next poll: ${new Date(b.next).toISOString()}.`;
+  }
+  nextDelay() {
+    return this.binding?.enabled &&
+      !this.closed &&
+      !this.commanding &&
+      !this.controller.signal.aborted
+      ? Math.max(0, Math.min(POLL, this.binding.next - this.ports.now()))
+      : POLL;
   }
   command(session: string, text: string): Promise<string> {
+    if (text.trim() === "off") this.optOuts.add(session);
     // Abort immediately, before waiting for a concurrent sweep or enable.
     if (
       text.trim() === "off" &&
@@ -48,10 +100,50 @@ export class Monitor {
     this.control = result.catch(() => {});
     return result;
   }
-  private async execute(session: string, text: string) {
+  created(
+    session: string,
+    url: string,
+    started: number,
+    ended: number,
+  ): Promise<void> {
+    const result = this.control.then(async () => {
+      if (this.closed || this.optOuts.has(session)) return;
+      if (this.binding?.enabled) {
+        if (
+          this.binding.session !== session ||
+          this.binding.pr.url === parsePR(url).url
+        )
+          return;
+        await this.validSession(session, this.controller.signal);
+        const previous = await this.ports.head(
+          this.binding.pr,
+          this.controller.signal,
+        );
+        if (previous.state !== "closed" && previous.state !== "merged") return;
+      }
+      this.commanding = true;
+      this.enabling = session;
+      try {
+        await this.execute(session, `on ${url}`, { started, ended });
+      } finally {
+        this.commanding = false;
+        this.enabling = undefined;
+      }
+      await this.sweep();
+    });
+    this.control = result.catch(() => {});
+    return result;
+  }
+  private async execute(
+    session: string,
+    text: string,
+    creation?: { started: number; ended: number },
+  ) {
     if (this.closed) throw new Error("Plugin unloaded");
     if (text === "status" || !text) return this.status(session);
     if (text === "off") {
+      this.optOuts.add(session);
+      await this.ports.saveOptOuts([...this.optOuts]);
       if (this.binding?.session !== session) return this.status(session);
       this.controller.abort();
       await this.running;
@@ -74,27 +166,49 @@ export class Monitor {
     this.controller = new AbortController();
     const signal = this.controller.signal;
     await this.validSession(session, signal);
+    const validateCreation = (snap: Snapshot) => {
+      if (!creation) return;
+      if (
+        this.optOuts.has(session) ||
+        !snap.author ||
+        snap.author.toLowerCase() !== snap.viewer.toLowerCase() ||
+        !Number.isFinite(snap.created) ||
+        snap.created < Math.floor(creation.started / 1000) * 1000 ||
+        snap.created > creation.ended
+      )
+        throw new Error("Not a newly created session-owned PR");
+    };
+    // The PR's branch decides which worktree is its checkout, so the snapshot
+    // comes first. A closed or merged PR is reported before anything local.
+    const read = async () => {
+      const snap = await this.ports.snapshot(pr, signal);
+      if (snap.state !== "open") throw new Error("PR is not open");
+      const local = await this.ports.local(
+        { branch: snap.branch, head: snap.head },
+        signal,
+      );
+      this.validate(local, snap, pr.repo);
+      return { local, snap };
+    };
+    if (creation) validateCreation((await read()).snap);
     await this.ports.permission(session, pr.url, signal);
     if (signal.aborted || this.closed) throw new Error("Enable cancelled");
-    const [local, snap] = await Promise.all([
-      this.ports.local(signal),
-      this.ports.snapshot(pr, signal),
-    ]);
+    const { local, snap } = await read();
     await this.validSession(session, signal);
     if (signal.aborted || this.closed) throw new Error("Enable cancelled");
-    if (snap.state !== "open") throw new Error("PR is not open");
-    this.validate(local, snap, pr.repo);
+    validateCreation(snap);
     this.binding = {
       version: 1,
       session,
       directory: this.ports.directory,
       pr,
-      branch: local.branch,
+      branch: snap.branch,
+      checkout: local.checkout?.root ?? null,
       enabled: true,
       reason:
-        "Enabled explicitly. Existing comments baselined; no commit/push approval implied.",
+        "Enabled with permission. Catching up eligible feedback; no commit/push approval implied.",
       head: snap.head,
-      seen: snap.comments.map((c) => c.id),
+      seen: [],
       delivered: [],
       wakes: 0,
       total: 0,
@@ -106,6 +220,10 @@ export class Monitor {
       totalAttempts: 0,
     };
     await this.ports.save(this.binding);
+    if (!creation) {
+      this.optOuts.delete(session);
+      await this.ports.saveOptOuts([...this.optOuts]);
+    }
     return this.status(session);
   }
   sweep(): Promise<void> {
@@ -123,17 +241,12 @@ export class Monitor {
         "Session moved, archived, or belongs to another location",
       );
   }
+  // Only repository identity fails closed. Where the PR is checked out, if
+  // anywhere, is reported to the session instead of blocking monitoring.
   private validate(local: Local, snap: Snapshot, repo: string) {
-    if (
-      local.root !== this.ports.directory ||
-      local.repo !== repo ||
-      snap.headRepo !== repo ||
-      local.branch !== snap.branch ||
-      !local.branch ||
-      local.head !== snap.head
-    )
+    if (local.repo !== repo || snap.headRepo !== repo || !snap.branch)
       throw new Error(
-        "Repository, worktree, branch, or head mismatch; waiting for exact PR checkout",
+        "Repository mismatch or fork PR: the PR must belong to this checkout's origin repository",
       );
   }
   private async step() {
@@ -172,13 +285,8 @@ export class Monitor {
       }
       if (b.directory !== this.ports.directory)
         throw new Error("Stored location mismatch");
-      const [localResult, snapshotResult] = await Promise.allSettled([
-        this.ports.local(signal),
-        this.ports.snapshot(b.pr, signal),
-      ]);
+      const snap = await this.ports.snapshot(b.pr, signal);
       if (signal.aborted) return;
-      if (snapshotResult.status === "rejected") throw snapshotResult.reason;
-      const snap = snapshotResult.value;
       if (snap.state !== "open") {
         b.enabled = false;
         b.pending = null;
@@ -186,10 +294,17 @@ export class Monitor {
         await this.ports.save(b);
         return;
       }
-      if (localResult.status === "rejected") throw localResult.reason;
-      const local = localResult.value;
+      if (snap.branch !== b.branch) throw new Error("PR head branch changed");
+      const local = await this.ports.local(
+        { branch: b.branch, head: snap.head },
+        signal,
+      );
+      if (signal.aborted) return;
       this.validate(local, snap, b.pr.repo);
-      if (local.branch !== b.branch) throw new Error("Bound branch changed");
+      const tree = local.checkout;
+      // Conflicts are repaired in the PR checkout, so they need a clean one.
+      const conflictReady = !!tree && !tree.dirty && !tree.operation;
+      b.checkout = tree?.root ?? null;
       if (b.head !== snap.head) {
         b.head = snap.head;
         b.wakes = 0;
@@ -199,7 +314,7 @@ export class Monitor {
       }
       if (b.pending) {
         const activeKeys = new Set(snap.failures.map((f) => `ci:${f.key}`));
-        if (snap.mergeable === false && !local.dirty && !local.operation)
+        if (snap.mergeable === false && conflictReady)
           activeKeys.add(`conflict:${snap.head}:${snap.base}`);
         const activeComments = new Set(
           snap.comments
@@ -246,15 +361,16 @@ export class Monitor {
         const conflictKey = `conflict:${snap.head}:${snap.base}`;
         const conflict =
           snap.mergeable === false &&
-          !local.dirty &&
-          !local.operation &&
+          conflictReady &&
           !b.delivered.includes(conflictKey);
         if (!failures.length && !comments.length && !conflict) {
           b.errors = 0;
           b.reason =
-            snap.mergeable === false && (local.dirty || local.operation)
-              ? "Conflict paused: dirty tree or Git operation in progress."
-              : "Waiting for new actionable events.";
+            snap.mergeable === false && !tree
+              ? "Conflict paused: no worktree has the PR branch checked out."
+              : snap.mergeable === false && !conflictReady
+                ? "Conflict paused: dirty tree or Git operation in progress."
+                : "Waiting for new actionable events.";
           await this.ports.save(b);
           return;
         }
@@ -280,8 +396,10 @@ export class Monitor {
           head: snap.head,
           keys,
           comments: comments.map((c) => c.id),
+          checkout: tree?.root ?? null,
           text:
             `PR monitor observations for ${b.pr.url}, head ${snap.head}.\n` +
+            checkoutNote(this.ports.directory, b.branch, snap.head, tree) +
             "Recheck the current PR head, checkout, and failures before changing anything; queued observations may be stale. " +
             "Investigate and repair relevant failures or eligible feedback, then verify. Obey project instructions and ordinary tool permissions. " +
             "After verification, commit and push only when separately authorized under those instructions and user approvals; otherwise ask. " +
@@ -300,21 +418,21 @@ export class Monitor {
         await this.ports.save(b);
       }
       // Re-read immediately before admission; the model must recheck again at execution.
-      const [fresh, checkout] = await Promise.all([
+      const [fresh, current] = await Promise.all([
         this.ports.head(b.pr, signal),
-        this.ports.local(signal),
+        this.ports.local({ branch: b.branch, head: b.pending.head }, signal),
       ]);
       await this.validSession(b.session, signal);
       if (signal.aborted || this.closed || !b.enabled) return;
+      const checkout = current.checkout;
       if (
         fresh.state !== "open" ||
         fresh.head !== b.pending.head ||
-        checkout.head !== b.pending.head ||
-        checkout.repo !== b.pr.repo ||
-        checkout.root !== b.directory ||
-        checkout.branch !== b.branch ||
+        current.repo !== b.pr.repo ||
+        // The text names a directory; withhold it if the checkout moved.
+        (b.pending.checkout ?? null) !== (checkout?.root ?? null) ||
         (b.pending.keys.some((k) => k.startsWith("conflict:")) &&
-          (checkout.dirty || checkout.operation))
+          (!checkout || checkout.dirty || checkout.operation))
       ) {
         b.pending = null;
         b.reason = "Stale observation or unsafe checkout; delivery withheld.";
@@ -339,7 +457,7 @@ export class Monitor {
         this.ports.now() +
         Math.min(3_600_000, POLL * 2 ** Math.min(b.errors, 6));
       b.reason =
-        "Read/admission unavailable or checkout mismatch; retrying with backoff. No model wakeup for errors.";
+        "Read/admission unavailable or repository mismatch; retrying with backoff. No model wakeup for errors.";
       await this.ports.save(b);
     }
   }
