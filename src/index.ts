@@ -59,11 +59,14 @@ export default Plugin.define({
       snapshot: (pr, signal) => github.snapshot(pr, signal),
       head: (pr, signal) => github.head(pr, signal),
       deliver: async (sessionID, box, signal) => {
-        await ctx.session.prompt(
+        // Synthetic messages use the TUI's compact notification presentation;
+        // keep the full observations in text so the agent still receives them.
+        await ctx.session.synthetic(
           {
             sessionID,
             id: box.id,
             text: box.text,
+            description: "PR monitor observations",
             delivery: "queue",
             resume: true,
             metadata: { source: "opencode.pr-monitor", head: box.head },
