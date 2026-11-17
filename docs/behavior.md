@@ -124,7 +124,10 @@ From the session that owns the checked-out PR branch:
 ```
 
 `on` validates the session location and that the PR is open and belongs to the
-session checkout's `origin` repository (no forks). It then looks for the PR's
+`origin` repository of the checkout used (no forks). That checkout is the
+session directory when its `origin` matches the PR. Otherwise, for example for
+a session in the home directory, the plugin searches for one (see "Finding the
+repository" below). It then looks for the PR's
 checkout in `git worktree list --porcelain` of that repository: the worktree with
 the PR branch checked out, or else one detached at the PR head, preferring the
 session's own directory. Finding none does not refuse enabling. It asserts `pr-monitor.enable` on the
@@ -178,6 +181,35 @@ It never merges, rebases, force-pushes, auto-merges, or archives anything.
 call. `off` aborts ongoing reads promptly and persists the disabled binding and opt-out.
 An already admitted queued request cannot be retracted by this plugin; review
 the session inbox before allowing it to run if necessary.
+
+### Finding the repository
+
+Earlier versions required the session directory to be a checkout of the PR's
+repository. Now the PR URL decides the repository, and the plugin finds a local
+checkout when the session directory is not one:
+
+1. The session directory, when its `origin` remote is the PR's owner/repo.
+2. Otherwise, checkouts under the search roots whose `origin` matches, in https
+   or ssh form, ignoring case. Linked worktrees of a found checkout count too,
+   wherever they live, and all worktrees of one repository count as one.
+3. Among several repositories, the one with a worktree on the PR head branch (or
+   detached at the PR head) wins. Without such a worktree, the repository's main
+   checkout is used, and repair requests say no worktree has the branch.
+
+Search roots are the plugin option `searchRoots` (absolute or `~/` paths), or
+else whichever of `~/Github`, `~/GitHub`, `~/github`, `~/Code`, `~/code`, `~/src`,
+`~/Projects`, `~/projects`, `~/Developer`, `~/dev`, `~/repos` and `~/workspace`
+exist. The home directory itself is never searched. The walk goes two levels
+below each root, skips hidden directories, `node_modules`, symbolic links and the
+insides of checkouts, and stops after 5,000 directories. The whole search,
+including Git calls, stops after 10 seconds.
+
+If nothing matches, several repositories are equally good, or a cap stops the
+search, `on` fails with a message listing the roots or candidates and how to set
+`searchRoots`. The plugin does not guess. The result is cached per session and
+repository; each read re-checks the cached checkout's `origin` and searches again
+if it changed or disappeared. Only read-only Git commands run (`remote get-url`,
+`worktree list`, `status`, `rev-parse`), always with `-C <dir>`.
 
 ## Operation and safety
 
@@ -237,8 +269,9 @@ the session inbox before allowing it to run if necessary.
 
 ## Limits and compatibility
 
-- **GitHub.com only**, same-repository PRs of the `origin` remote. The PR checkout
-  is resolved across the repository's worktrees. Fork PRs, Enterprise, nested locations, and remote-name
+- **GitHub.com only**, same-repository PRs of the `origin` remote. The repository
+  is the session's checkout or one found under the search roots; the PR checkout
+  is resolved across that repository's worktrees. Fork PRs, Enterprise, nested locations, and remote-name
   customization are intentionally unsupported rather than guessed.
 - **Bounded API snapshot:** at most 100 check contexts, issue comments, reviews,
   review threads, and comments per thread. Each connection's `hasNextPage` is

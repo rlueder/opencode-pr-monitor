@@ -11,8 +11,17 @@ export type Checkout = {
 export type Local = {
   repo: string;
   checkout: Checkout | null;
+  // Set when the session directory is not a checkout of the PR's repository
+  // and the plugin found one elsewhere: that repository's main checkout.
+  found?: string;
 };
-export type Target = { branch: string; head: string };
+// The PR's repository and head, and the session it is read for.
+export type Target = {
+  session: string;
+  repo: string;
+  branch: string;
+  head: string;
+};
 export type Comment = {
   id: string;
   author: string;

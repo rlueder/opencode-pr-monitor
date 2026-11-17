@@ -8,6 +8,7 @@ import type {
   Outbox,
   Ports,
   Snapshot,
+  Target,
 } from "../src/types.ts";
 
 const url = "https://github.com/acme/project/pull/42";
@@ -36,7 +37,7 @@ function fixture() {
     operation: false,
     present: true,
   };
-  const targets: { branch: string; head: string }[] = [];
+  const targets: Target[] = [];
   const snap: Snapshot = {
     author: "me",
     created: now,
@@ -440,7 +441,12 @@ test("enable works when the session directory is a different worktree than the P
   // Session runs in /work on another branch; the PR branch lives elsewhere.
   f.local.root = "/repo-fix-dexa-vat-apoe-review";
   assert.match(await f.enable(), /PR monitor: on/);
-  assert.deepEqual(f.targets.at(-1), { branch: "fix", head: "sha1" });
+  assert.deepEqual(f.targets.at(-1), {
+    session: "s1",
+    repo: "acme/project",
+    branch: "fix",
+    head: "sha1",
+  });
   assert.equal(f.persisted()?.checkout, "/repo-fix-dexa-vat-apoe-review");
   assert.match(
     f.monitor.status("s1"),
@@ -557,6 +563,13 @@ test("checkout note quotes paths so they cannot open tags", () => {
       operation: false,
     }),
     /checked out in this session's directory "\/work"\.\n$/,
+  );
+  // A session outside the repository is told where the repository was found.
+  const found = checkoutNote("/home/r", "fix", "sha1", null, "/code/p<x>");
+  assert.ok(!found.includes("<"));
+  assert.match(
+    found,
+    /"\/home\/r" is not a checkout of the PR's repository; the plugin found the repository at "\/code\/p\\u003cx\\u003e", and none of its worktrees has the PR branch "fix"/,
   );
 });
 

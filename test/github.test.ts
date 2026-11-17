@@ -331,7 +331,7 @@ test("a session directory outside any Git repository gets an actionable error", 
     await assert.rejects(
       readLocal(
         session,
-        { branch: "fix", head: "sha1" },
+        { session: "s1", repo: "acme/project", branch: "fix", head: "sha1" },
         runner(session),
         new AbortController().signal,
       ),
@@ -360,7 +360,7 @@ test("a session checkout without an origin remote says so", async () => {
   await assert.rejects(
     readLocal(
       "/repo",
-      { branch: "fix", head: "sha1" },
+      { session: "s1", repo: "acme/project", branch: "fix", head: "sha1" },
       run,
       new AbortController().signal,
     ),
@@ -470,7 +470,7 @@ test("PR checkout resolves to the worktree that has the PR branch, not the sessi
     );
     const local = await readLocal(
       session,
-      { branch: "fix/dexa", head: "sha1" },
+      { session: "s1", repo: "acme/project", branch: "fix/dexa", head: "sha1" },
       git.run,
       new AbortController().signal,
     );
@@ -509,7 +509,7 @@ test("no worktree with the PR branch yields no checkout instead of an error", as
     );
     const local = await readLocal(
       session,
-      { branch: "fix", head: "sha1" },
+      { session: "s1", repo: "acme/project", branch: "fix", head: "sha1" },
       git.run,
       new AbortController().signal,
     );
@@ -533,7 +533,7 @@ test("a detached worktree at the PR head is used, preferring the session directo
     );
     const local = await readLocal(
       session,
-      { branch: "fix", head: "sha1" },
+      { session: "s1", repo: "acme/project", branch: "fix", head: "sha1" },
       git.run,
       new AbortController().signal,
     );
@@ -582,7 +582,7 @@ test("readLocal against a real repository with a linked worktree", async () => {
     const head = (await git("-C", linked, "rev-parse", "HEAD")).trim();
     const local = await readLocal(
       await realpath(main),
-      { branch: "fix/x", head },
+      { session: "s1", repo: "acme/project", branch: "fix/x", head },
       runner(main),
       signal,
     );

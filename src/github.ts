@@ -196,35 +196,60 @@ async function existing(path: string) {
   }
 }
 
-// Reads the session's repository and finds the worktree that has the PR checked
+// Finds a checkout of the PR's repository outside the session directory and
+// returns a directory to run `git worktree list` from (see locate.ts).
+export type Finder = {
+  find(target: Target, signal: AbortSignal): Promise<string>;
+  forget(target: Target): void;
+};
+
+// Reads the PR's repository and finds the worktree that has the PR checked
 // out. The session directory itself may be any worktree of that repository.
+// When it is not a checkout of the PR's repository at all, for example a
+// session in the home directory, the finder locates one elsewhere.
 export async function readLocal(
   directory: string,
   target: Target,
   run: Runner,
   signal: AbortSignal,
+  finder?: Finder,
 ): Promise<Local> {
   const git = (...args: string[]) => run("git", args, signal);
   // Read origin first, so a session directory outside a checkout fails with
   // that explanation rather than whichever concurrent read lost the race.
-  const origin = await git("remote", "get-url", "origin").catch(
-    (error: unknown) => {
-      if (!(error instanceof CommandError) || error.reason !== "exit")
-        throw error;
+  let repo: string | undefined;
+  let problem: Error | undefined;
+  try {
+    repo = remoteRepo(await git("remote", "get-url", "origin"));
+  } catch (error) {
+    if (error instanceof CommandError && error.reason === "exit") {
       const where = JSON.stringify(directory);
-      const problem =
-        error.code === 128
-          ? `The session directory ${where} is not inside a Git repository`
-          : error.code === 2
-            ? `The session directory ${where} has no origin remote`
-            : `Could not read the origin remote of the session directory ${where}`;
-      throw new Error(
-        `${problem} (${error.message}). Start the OpenCode session in a checkout or worktree of the PR's repository, then run /pr-monitor on again.`,
+      problem = new Error(
+        `${
+          error.code === 128
+            ? `The session directory ${where} is not inside a Git repository`
+            : error.code === 2
+              ? `The session directory ${where} has no origin remote`
+              : `Could not read the origin remote of the session directory ${where}`
+        } (${error.message}). Start the OpenCode session in a checkout or worktree of the PR's repository, then run /pr-monitor on again.`,
       );
-    },
-  );
-  const list = await git("worktree", "list", "--porcelain", "-z");
-  const repo = remoteRepo(origin);
+    } else if (error instanceof CommandError || !finder) throw error;
+  }
+  let found: string | undefined;
+  if (repo !== target.repo && finder) {
+    found = await finder.find(target, signal);
+    repo = target.repo;
+  } else if (problem) throw problem;
+  const list = await (
+    found
+      ? git("-C", found, "worktree", "list", "--porcelain", "-z")
+      : git("worktree", "list", "--porcelain", "-z")
+  ).catch((error: unknown) => {
+    // A found checkout may have moved since it was cached; search again next time.
+    if (found && finder && !signal.aborted) finder.forget(target);
+    throw error;
+  });
+  const extra = found ? { found } : {};
   const trees = parseWorktrees(list).filter(
     (tree) => !tree.bare && !tree.prunable && !!tree.head,
   );
@@ -245,7 +270,8 @@ export async function readLocal(
       }
     }
   }
-  if (!chosen?.head || !root) return { repo, checkout: null };
+  if (!repo) throw new Error("Incomplete origin remote");
+  if (!chosen?.head || !root) return { repo, checkout: null, ...extra };
   const [status, gitdir] = await Promise.all([
     git("-C", root, "status", "--porcelain", "--untracked-files=normal"),
     git("-C", root, "rev-parse", "--absolute-git-dir").then((s) => s.trim()),
@@ -277,6 +303,7 @@ export async function readLocal(
   );
   return {
     repo,
+    ...extra,
     checkout: {
       root,
       branch: chosen.branch?.startsWith("refs/heads/")

@@ -74,6 +74,24 @@ GitHub reads run as plain read-only subprocesses, not session tools, so they nev
 prompt. The rule covers only monitoring: repairs still run under the session's
 ordinary rules for shell commands, commits and pushes.
 
+The session does not have to run inside the repository. When its directory is
+not a checkout of the PR's repository (for example a session in your home
+directory), the plugin searches for one. By default it searches whichever of
+`~/Github`, `~/Code`, `~/src`, `~/Projects`, `~/Developer`, `~/dev`, `~/repos`
+and similar directories exist, two levels deep. To search other directories,
+give the plugin entry options:
+
+```jsonc
+{
+  "plugins": [
+    {
+      "package": "/absolute/path/to/opencode-pr-monitor",
+      "options": { "searchRoots": ["~/Github", "/srv/code"] },
+    },
+  ],
+}
+```
+
 The package includes a `./tui` companion. To explicitly load it in the terminal,
 including when connected to a remote server, add the local package path to
 `~/.config/opencode/cli.json` as well:
@@ -126,12 +144,16 @@ That command only shows the controls; it does not enable monitoring.
 
 ## Limits and safety
 
-- GitHub.com only, same-repository PRs of the session checkout's `origin`. Fork
-  PRs and GitHub Enterprise are not supported.
-- Start the OpenCode session in a checkout or worktree of the PR's repository.
-  A session opened elsewhere, such as your home directory, cannot be bound;
-  `/pr-monitor on` says the directory is not inside a Git repository.
-- The PR checkout is looked up in `git worktree list` of the session's repository:
+- GitHub.com only, same-repository PRs whose `origin` remote matches the PR URL.
+  Fork PRs and GitHub Enterprise are not supported.
+- The repository is the session's directory when its `origin` matches the PR.
+  Otherwise the plugin searches the search roots for checkouts whose `origin`
+  matches (https or ssh, any case). It prefers the repository that has a
+  worktree on the PR branch. If it finds no checkout, or several equally good
+  ones, `/pr-monitor on` lists what it searched or found instead of guessing.
+  The search is capped at two levels, 5,000 directories and 10 seconds, and is
+  cached per session. It only runs read-only Git commands.
+- The PR checkout is looked up in `git worktree list` of that repository:
   the worktree with the PR branch, or one detached at the PR head. Repair requests
   name that directory. If no worktree has the branch, CI and review events are
   still delivered with a note saying so; conflicts wait for a clean checkout.
