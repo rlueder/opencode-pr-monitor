@@ -450,14 +450,18 @@ export class Monitor {
       b.reason =
         "Queued for originating session; admission acknowledged, not repair completion.";
       await this.ports.save(b);
-    } catch {
+    } catch (error) {
       if (signal.aborted || this.closed) return;
       b.errors++;
       b.next =
         this.ports.now() +
         Math.min(3_600_000, POLL * 2 ** Math.min(b.errors, 6));
-      b.reason =
-        "Read/admission unavailable or repository mismatch; retrying with backoff. No model wakeup for errors.";
+      // Error messages name the failed read, never command stderr.
+      const cause =
+        error instanceof Error
+          ? ` Last error: ${error.message.slice(0, 500)}`
+          : "";
+      b.reason = `Read/admission unavailable or repository mismatch; retrying with backoff. No model wakeup for errors.${cause}`;
       await this.ports.save(b);
     }
   }

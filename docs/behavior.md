@@ -224,7 +224,10 @@ the session inbox before allowing it to run if necessary.
   rebuilt with the new location. No checkout/fetch/pull is performed.
 - State contains PR identifiers, deduplication IDs, and any pending bounded
   feedback text in OpenCode's plugin storage. No auth material or check logs are
-  stored or logged. Command diagnostics are drained without retention.
+  stored or logged. Command diagnostics are drained without retention. A failed
+  read is reported by command and outcome only, such as "git remote get-url
+  exited with code 128" or "gh api graphql timed out after 20 s", in the `on`
+  error and in `status` while backing off.
 - Subprocesses use argv, no shell, a 20-second timeout, 4 MB stdout limit, and
   AbortSignals. Cancellation kills the owned POSIX process group, including
   helpers. Windows is rejected before spawning any subprocess because this MVP

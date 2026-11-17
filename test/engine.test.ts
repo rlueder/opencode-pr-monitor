@@ -620,6 +620,8 @@ test("offline/rate-limit/partial errors back off without model requests", async 
   f.failRead();
   await f.monitor.sweep();
   assert.equal(f.persisted()?.errors, 1);
+  // Status names the failed read instead of only saying a read failed.
+  assert.match(f.persisted()?.reason ?? "", /Rate limited or offline/);
   const calls = f.calls();
   f.advance(POLL);
   await f.monitor.sweep();

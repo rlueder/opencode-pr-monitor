@@ -128,6 +128,9 @@ That command only shows the controls; it does not enable monitoring.
 
 - GitHub.com only, same-repository PRs of the session checkout's `origin`. Fork
   PRs and GitHub Enterprise are not supported.
+- Start the OpenCode session in a checkout or worktree of the PR's repository.
+  A session opened elsewhere, such as your home directory, cannot be bound;
+  `/pr-monitor on` says the directory is not inside a Git repository.
 - The PR checkout is looked up in `git worktree list` of the session's repository:
   the worktree with the PR branch, or one detached at the PR head. Repair requests
   name that directory. If no worktree has the branch, CI and review events are
