@@ -15,10 +15,12 @@ to commit, push, merge, or ignore project instructions.
 
 ## Binding and reads
 
-One session owns one binding per exact canonical location. Validate session
-directory, origin repository and PR head repository. Reject forks for this MVP
-rather than guess remote ownership. Resolve the PR checkout across
-`git worktree list --porcelain` of the session's repository: the worktree with
+One session owns one binding per exact canonical location. Validate the session
+location, the origin repository of the checkout used and the PR head repository.
+Reject forks for this MVP rather than guess remote ownership. The session
+directory need not be a checkout of the PR's repository; see "Sessions outside a
+checkout". Resolve the PR checkout across
+`git worktree list --porcelain` of that repository: the worktree with
 the PR branch, else one detached at the PR head. Read dirty/operation state there,
 name that directory in repair requests, and report a missing or diverged checkout
 in the request instead of refusing. Conflicts need a clean resolved checkout. Use authenticated `gh` via argv, never a shell. Only read operations.
@@ -184,3 +186,29 @@ only permission asserted is `pr-monitor.enable`; document `allow` so enabling
 does not prompt, without changing the rules repairs run under. A confirmed Turn
 on/off closes its notification. Tag the server's on/off status reply in metadata
 and ignore it in the TUI so it cannot reopen the notice.
+
+## Sessions outside a checkout
+
+This section changes an earlier assumption of this spec: the session directory
+was required to be inside a checkout whose `origin` is the PR's repository, so a
+session in the home directory could never be bound. The PR URL already names the
+repository, so the plugin now finds a checkout itself.
+
+Use the session directory when its `origin` matches the PR's owner/repo.
+Otherwise search for checkouts whose `origin` matches (https or ssh form,
+case-insensitive owner/repo) under search roots: the plugin option
+`searchRoots` (absolute or `~/` paths), else whichever of a fixed list of
+common directories under the home directory exist (`~/Github`, `~/Code`, `~/src`,
+and so on), never the home directory itself. Walk two levels below each root,
+skipping hidden directories, `node_modules`, symbolic links and the insides of
+checkouts. Cap the walk at 5,000 directories and the whole search, Git calls
+included, at 10 seconds. Treat checkouts that are worktrees of one repository as
+one repository, and include its linked worktrees wherever they live. Prefer the
+repository with a worktree on the PR head branch (or detached at the PR head),
+else accept its main checkout as the repository location. With no candidate,
+several equally good ones, or a capped search, fail with a message that lists the
+roots or the candidates and how to set `searchRoots`; never guess. Cache the
+result per session and repository, and search again when the cached checkout
+no longer has the matching `origin`. Only run read-only Git commands, always
+with `-C <dir>`; never write in a found checkout. Repair requests name the found
+checkout as they would any other worktree.

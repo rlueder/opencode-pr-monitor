@@ -15,10 +15,13 @@ export function checkoutNote(
   branch: string,
   head: string,
   checkout: Checkout | null,
+  found?: string,
 ): string {
   if (!checkout)
     return (
-      `No worktree of this repository has the PR branch ${quote(branch)} checked out, so this session's directory ${quote(directory)} is not the PR checkout. ` +
+      (found
+        ? `This session's directory ${quote(directory)} is not a checkout of the PR's repository; the plugin found the repository at ${quote(found)}, and none of its worktrees has the PR branch ${quote(branch)} checked out. `
+        : `No worktree of this repository has the PR branch ${quote(branch)} checked out, so this session's directory ${quote(directory)} is not the PR checkout. `) +
       "CI and review observations are still reported. Do not change code in another branch's checkout: " +
       "check out the PR branch in a worktree first, following project instructions, or ask.\n"
     );
@@ -184,7 +187,7 @@ export class Monitor {
       const snap = await this.ports.snapshot(pr, signal);
       if (snap.state !== "open") throw new Error("PR is not open");
       const local = await this.ports.local(
-        { branch: snap.branch, head: snap.head },
+        { session, repo: pr.repo, branch: snap.branch, head: snap.head },
         signal,
       );
       this.validate(local, snap, pr.repo);
@@ -296,7 +299,12 @@ export class Monitor {
       }
       if (snap.branch !== b.branch) throw new Error("PR head branch changed");
       const local = await this.ports.local(
-        { branch: b.branch, head: snap.head },
+        {
+          session: b.session,
+          repo: b.pr.repo,
+          branch: b.branch,
+          head: snap.head,
+        },
         signal,
       );
       if (signal.aborted) return;
@@ -399,7 +407,13 @@ export class Monitor {
           checkout: tree?.root ?? null,
           text:
             `PR monitor observations for ${b.pr.url}, head ${snap.head}.\n` +
-            checkoutNote(this.ports.directory, b.branch, snap.head, tree) +
+            checkoutNote(
+              this.ports.directory,
+              b.branch,
+              snap.head,
+              tree,
+              local.found,
+            ) +
             "Recheck the current PR head, checkout, and failures before changing anything; queued observations may be stale. " +
             "Investigate and repair relevant failures or eligible feedback, then verify. Obey project instructions and ordinary tool permissions. " +
             "After verification, commit and push only when separately authorized under those instructions and user approvals; otherwise ask. " +
@@ -420,7 +434,15 @@ export class Monitor {
       // Re-read immediately before admission; the model must recheck again at execution.
       const [fresh, current] = await Promise.all([
         this.ports.head(b.pr, signal),
-        this.ports.local({ branch: b.branch, head: b.pending.head }, signal),
+        this.ports.local(
+          {
+            session: b.session,
+            repo: b.pr.repo,
+            branch: b.branch,
+            head: b.pending.head,
+          },
+          signal,
+        ),
       ]);
       await this.validSession(b.session, signal);
       if (signal.aborted || this.closed || !b.enabled) return;

@@ -2,6 +2,7 @@ import { realpath } from "node:fs/promises";
 import { Plugin } from "@opencode/plugin";
 import { Monitor } from "./engine.ts";
 import { GitHub, readLocal, runner } from "./github.ts";
+import { defaultRoots, existingRoots, Locator, searchRoots } from "./locate.ts";
 import { decodeBinding } from "./types.ts";
 import { MonitorUI, STATUS_SOURCE, statusAction } from "./rpc.ts";
 import { watchCreations } from "./creation.ts";
@@ -18,6 +19,12 @@ export default Plugin.define({
     await owners.get(directory)?.();
     const run = runner(directory);
     const github = new GitHub(run);
+    // Sessions outside a checkout (for example in the home directory) find the
+    // PR's repository under these roots. Invalid options fail plugin setup.
+    const configured = searchRoots(ctx.options);
+    const locator = new Locator(run, () =>
+      configured ? existingRoots(configured) : defaultRoots(),
+    );
     const key = `binding/v1/${encodeURIComponent(directory)}`;
     const optOutKey = `auto-off/v1/${encodeURIComponent(directory)}`;
     const monitor = new Monitor({
@@ -55,7 +62,8 @@ export default Plugin.define({
       },
       permission: (sessionID, url, signal) =>
         assertEnable(ctx.permission, sessionID, url, signal),
-      local: (target, signal) => readLocal(directory, target, run, signal),
+      local: (target, signal) =>
+        readLocal(directory, target, run, signal, locator),
       snapshot: (pr, signal) => github.snapshot(pr, signal),
       head: (pr, signal) => github.head(pr, signal),
       deliver: async (sessionID, box, signal) => {
