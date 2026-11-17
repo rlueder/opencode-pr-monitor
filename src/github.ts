@@ -8,6 +8,43 @@ export type Runner = (
   args: readonly string[],
   signal: AbortSignal,
 ) => Promise<string>;
+
+export type Failure = "exit" | "timeout" | "output" | "spawn" | "aborted";
+
+// A read that did not complete. The message names the command and how it
+// failed, never its stderr, which may carry auth-sensitive diagnostics.
+export class CommandError extends Error {
+  constructor(
+    readonly command: string,
+    readonly reason: Failure,
+    readonly code: number | string | null = null,
+    detail = "",
+  ) {
+    super(
+      `${command} ${
+        reason === "exit"
+          ? `exited with code ${code}`
+          : reason === "spawn"
+            ? `could not start (${code})`
+            : reason === "aborted"
+              ? "was aborted"
+              : detail
+      }`,
+    );
+    this.name = "CommandError";
+  }
+}
+
+// Short, secret-free label: the program and its leading subcommand words,
+// skipping flags, paths, values and inline scripts.
+export function describe(file: string, args: readonly string[]): string {
+  const words = args.filter((a) => /^[a-z][a-z-]*$/.test(a)).slice(0, 2);
+  return [file.split("/").pop() ?? file, ...words].join(" ");
+}
+
+const duration = (ms: number) =>
+  ms % 1000 === 0 ? `${ms / 1000} s` : `${ms} ms`;
+
 export function runner(
   cwd: string,
   timeout = 20_000,
@@ -36,11 +73,12 @@ export function runner(
           GIT_OPTIONAL_LOCKS: "0",
         },
       });
+      const command = describe(file, args);
       const chunks: Buffer[] = [];
       let size = 0;
-      let failed = false;
-      const stop = () => {
-        failed = true;
+      let failure: CommandError | undefined;
+      const stop = (error: CommandError) => {
+        failure ??= error;
         // Own a process group so a credential helper or Git child cannot outlive
         // cancellation. Windows is rejected before spawning any subprocess.
         if (child.pid) {
@@ -51,27 +89,49 @@ export function runner(
           }
         } else child.kill("SIGKILL");
       };
-      const timer = setTimeout(stop, timeout);
-      signal.addEventListener("abort", stop, { once: true });
+      const timer = setTimeout(
+        () =>
+          stop(
+            new CommandError(
+              command,
+              "timeout",
+              null,
+              `timed out after ${duration(timeout)}`,
+            ),
+          ),
+        timeout,
+      );
+      const abort = () => stop(new CommandError(command, "aborted"));
+      signal.addEventListener("abort", abort, { once: true });
       child.stdout.on("data", (chunk: Buffer) => {
         size += chunk.length;
-        if (size > maxBytes) stop();
-        if (!failed) chunks.push(chunk);
+        if (size > maxBytes)
+          stop(
+            new CommandError(
+              command,
+              "output",
+              null,
+              `exceeded the ${maxBytes}-byte output limit`,
+            ),
+          );
+        if (!failure) chunks.push(chunk);
       });
       // Drain stderr, but never retain or log auth-sensitive command diagnostics.
       child.stderr.resume();
-      child.on("error", () => {
-        failed = true;
+      child.on("error", (error: NodeJS.ErrnoException) => {
+        failure ??= new CommandError(
+          command,
+          "spawn",
+          error.code ?? "unknown error",
+        );
       });
       child.on("close", (code) => {
         clearTimeout(timer);
-        signal.removeEventListener("abort", stop);
-        if (failed || code !== 0 || signal.aborted)
-          reject(
-            new Error(
-              "Read command failed, timed out, aborted, or exceeded output limit",
-            ),
-          );
+        signal.removeEventListener("abort", abort);
+        if (signal.aborted) failure ??= new CommandError(command, "aborted");
+        if (!failure && code !== 0)
+          failure = new CommandError(command, "exit", code);
+        if (failure) reject(failure);
         else accept(Buffer.concat(chunks).toString("utf8"));
       });
     });
@@ -145,10 +205,25 @@ export async function readLocal(
   signal: AbortSignal,
 ): Promise<Local> {
   const git = (...args: string[]) => run("git", args, signal);
-  const [origin, list] = await Promise.all([
-    git("remote", "get-url", "origin"),
-    git("worktree", "list", "--porcelain", "-z"),
-  ]);
+  // Read origin first, so a session directory outside a checkout fails with
+  // that explanation rather than whichever concurrent read lost the race.
+  const origin = await git("remote", "get-url", "origin").catch(
+    (error: unknown) => {
+      if (!(error instanceof CommandError) || error.reason !== "exit")
+        throw error;
+      const where = JSON.stringify(directory);
+      const problem =
+        error.code === 128
+          ? `The session directory ${where} is not inside a Git repository`
+          : error.code === 2
+            ? `The session directory ${where} has no origin remote`
+            : `Could not read the origin remote of the session directory ${where}`;
+      throw new Error(
+        `${problem} (${error.message}). Start the OpenCode session in a checkout or worktree of the PR's repository, then run /pr-monitor on again.`,
+      );
+    },
+  );
+  const list = await git("worktree", "list", "--porcelain", "-z");
   const repo = remoteRepo(origin);
   const trees = parseWorktrees(list).filter(
     (tree) => !tree.bare && !tree.prunable && !!tree.head,
@@ -358,26 +433,37 @@ export function decodeSnapshot(raw: string): Snapshot {
 
 export class GitHub {
   constructor(private readonly run: Runner) {}
-  private query(pr: PR, query: string, signal: AbortSignal) {
+  private async query(pr: PR, query: string, signal: AbortSignal) {
     const [owner, repo] = pr.repo.split("/");
-    return this.run(
-      "gh",
-      [
-        "api",
-        "graphql",
-        "--hostname",
-        "github.com",
-        "-f",
-        `query=${query}`,
-        "-f",
-        `owner=${owner}`,
-        "-f",
-        `repo=${repo}`,
-        "-F",
-        `number=${pr.number}`,
-      ],
-      signal,
-    );
+    try {
+      return await this.run(
+        "gh",
+        [
+          "api",
+          "graphql",
+          "--hostname",
+          "github.com",
+          "-f",
+          `query=${query}`,
+          "-f",
+          `owner=${owner}`,
+          "-f",
+          `repo=${repo}`,
+          "-F",
+          `number=${pr.number}`,
+        ],
+        signal,
+      );
+    } catch (error) {
+      if (!(error instanceof CommandError) || error.reason === "aborted")
+        throw error;
+      throw new Error(
+        `Reading PR ${pr.repo}#${pr.number} from GitHub failed: ${error.message}.` +
+          (error.reason === "exit"
+            ? " Check that `gh auth status` succeeds for the user running the OpenCode server."
+            : ""),
+      );
+    }
   }
   async snapshot(pr: PR, signal: AbortSignal) {
     return decodeSnapshot(await this.query(pr, QUERY, signal));

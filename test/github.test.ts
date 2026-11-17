@@ -4,6 +4,7 @@ import { mkdtemp, mkdir, writeFile, rm, realpath } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  CommandError,
   decodeSnapshot,
   GitHub,
   parseWorktrees,
@@ -274,7 +275,110 @@ test("subprocess argv is literal, stderr not leaked, exit/output/timeout/abort b
     run(process.execPath, ["-e", ""], controller.signal),
     /aborted/i,
   );
-  await assert.rejects(run("/no-such-program-pr-monitor", [], signal));
+  await assert.rejects(
+    run("/no-such-program-pr-monitor", [], signal),
+    /no-such-program-pr-monitor could not start \(ENOENT\)/,
+  );
+});
+
+test("a failed read names the command and how it failed, without stderr", async () => {
+  const signal = new AbortController().signal;
+  const run = runner(process.cwd(), 3000, 5000);
+  await assert.rejects(
+    run(
+      "git",
+      ["-C", "/no-such-dir-pr-monitor", "status", "--porcelain"],
+      signal,
+    ),
+    (error) =>
+      error instanceof CommandError &&
+      error.reason === "exit" &&
+      error.code === 128 &&
+      error.message === "git status exited with code 128",
+  );
+  await assert.rejects(
+    run(process.execPath, ["-e", "console.log('x'.repeat(10000))"], signal),
+    /exceeded the 5000-byte output limit/,
+  );
+  await assert.rejects(
+    runner(process.cwd(), 30)(
+      process.execPath,
+      ["-e", "setTimeout(()=>{},10000)"],
+      signal,
+    ),
+    /timed out after 30 ms/,
+  );
+});
+
+// Regression: OpenCode sessions started in a home directory failed every
+// `/pr-monitor on` with only "Read command failed, timed out, aborted, or
+// exceeded output limit", because `git remote get-url origin` exits 128 there.
+test("a session directory outside any Git repository gets an actionable error", async () => {
+  const base = await realpath(
+    await mkdtemp(
+      join(
+        process.env.PR_MONITOR_TEST_TMPDIR ?? tmpdir(),
+        "pr-monitor-norepo-",
+      ),
+    ),
+  );
+  const ceiling = process.env.GIT_CEILING_DIRECTORIES;
+  // Keep Git from discovering a repository above the temporary directory.
+  process.env.GIT_CEILING_DIRECTORIES = base;
+  const session = join(base, "home");
+  await mkdir(session);
+  try {
+    await assert.rejects(
+      readLocal(
+        session,
+        { branch: "fix", head: "sha1" },
+        runner(session),
+        new AbortController().signal,
+      ),
+      (error) =>
+        error instanceof Error &&
+        error.message.includes(JSON.stringify(session)) &&
+        /is not inside a Git repository/.test(error.message) &&
+        /git remote get-url exited with code 128/.test(error.message) &&
+        /Start the OpenCode session in a checkout or worktree/.test(
+          error.message,
+        ),
+    );
+  } finally {
+    if (ceiling === undefined) delete process.env.GIT_CEILING_DIRECTORIES;
+    else process.env.GIT_CEILING_DIRECTORIES = ceiling;
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("a session checkout without an origin remote says so", async () => {
+  const run = async (_file: string, args: readonly string[]) => {
+    if (args.join(" ") === "remote get-url origin")
+      throw new CommandError("git remote get-url", "exit", 2);
+    throw new Error(`Unexpected Git command: ${args.join(" ")}`);
+  };
+  await assert.rejects(
+    readLocal(
+      "/repo",
+      { branch: "fix", head: "sha1" },
+      run,
+      new AbortController().signal,
+    ),
+    /"\/repo" has no origin remote/,
+  );
+});
+
+test("a failed GitHub read names the PR and the gh command", async () => {
+  const github = new GitHub(async () => {
+    throw new CommandError("gh api graphql", "exit", 1);
+  });
+  await assert.rejects(
+    github.snapshot(
+      parsePR("https://github.com/acme/project/pull/42"),
+      new AbortController().signal,
+    ),
+    /Reading PR acme\/project#42 from GitHub failed: gh api graphql exited with code 1/,
+  );
 });
 
 // Builds `git worktree list --porcelain -z` output.
